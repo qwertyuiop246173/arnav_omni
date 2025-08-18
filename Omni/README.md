@@ -1,0 +1,1 @@
+npm i @gorhom/bottom-sheet axios jwt-decode haversine-distance react-native-countdown-circle-timer react-native-maps react-native-maps-directions react-native-mmkv react-native-responsive-fontsize rn-swipe-button react-native-svg socket.io-client rn-swipe-button zustand
