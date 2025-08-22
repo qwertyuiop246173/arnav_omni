@@ -4,7 +4,8 @@ import { Alert } from "react-native";
 import { resetAndNavigate } from "@/utils/Helpers";
 import { tokenStorage } from "@/store/storage";
 import { UseWS } from "./WSProvider";
-
+import { BASE_URL } from './config';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 interface coords {
     address: string,
     latitude: number,
@@ -39,53 +40,36 @@ interface RidePayload {
 // }
 
 
-export const createRide = async (payload: RidePayload) => {
-    try {
-        // Validate token first
-        const token = tokenStorage.getString('token');
-        if (!token) {
-            throw new Error('Authentication required');
-        }
+export const createRide = async (payload: any) => {
+    console.log('[rideService] createRide payload:', payload);
 
-        // Validate payload
-        if (!payload.fare || !payload.distance) {
-            throw new Error('Fare and distance are required');
-        }
-
-        const response = await apiClient.post('/ride/create', {
-            ...payload,
-            fare: Math.round(payload.fare), // Ensure fare is a whole number
-            distance: Number(payload.distance.toFixed(2)) // Format distance to 2 decimal places
-        });
-
-        if (!response.data?.ride) {
-            throw new Error('Invalid response from server');
-        }
-
-        console.log('Ride created successfully:', response.data.ride);
-
-        router.navigate({
-            pathname: '/customer/liveride',
-            params: {
-                id: response.data.ride._id,
-                status: response.data.ride.status
-            }
-        });
-
-        return response.data.ride;
-    } catch (error: any) {
-        console.error('Create ride error:', {
-            status: error.response?.status,
-            data: error.response?.data,
-            message: error.message
-        });
-
-        Alert.alert(
-            "Error",
-            error.response?.data?.msg || "Unable to create ride. Please try again."
-        );
-        return null;
+    // quick pre-check: ensure access token exists
+    const token = (await AsyncStorage.getItem('token')) || null;
+    console.log('[rideService] access token present:', !!token);
+    if (!token) {
+        const err: any = new Error('Not authenticated. Please sign in.');
+        err.name = 'AUTH_REQUIRED';
+        throw err;
     }
+
+    // try likely endpoints
+    const endpoints = ['/ride/create', '/ride'];
+    let lastErr: any = null;
+    for (const ep of endpoints) {
+        try {
+            const res = await apiClient.post(ep, payload);
+            console.log('[rideService] response status:', res.status, 'data:', res.data);
+            return res.data;
+        } catch (e: any) {
+            console.warn('[rideService] endpoint failed', ep, e?.response?.status || e.message);
+            lastErr = e;
+            const status = e?.response?.status;
+            if (status && status !== 404) throw e;
+        }
+    }
+    const finalErr: any = new Error('Failed to create ride');
+    finalErr.data = lastErr;
+    throw finalErr;
 };
 
 export const getMyRides = async (isCustomer: boolean = true) => {
@@ -93,7 +77,7 @@ export const getMyRides = async (isCustomer: boolean = true) => {
         const token = tokenStorage.getString('token');
         const { accessToken } = UseWS();
         // console.log('Current token:', token?.substring(0, 20) + '...');
-        console.log('Current token:',  accessToken);
+        console.log('Current token:', accessToken);
         // const refreshToken = tokenStorage.getString('refresh_token');
 
         if (!token) {

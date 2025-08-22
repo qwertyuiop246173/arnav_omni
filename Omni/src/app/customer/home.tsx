@@ -25,9 +25,9 @@ const CustomerHome = () => {
         setMapHeight(height)
     }, [])
 
-    useEffect(() => {
-        getMyRides()
-    }, [])
+    // useEffect(() => {
+    //     getMyRides()
+    // }, [])
 
     return (
         <View style={homeStyles.container}>

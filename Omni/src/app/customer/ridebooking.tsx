@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, TouchableOpacity, Image } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, Image, Alert } from 'react-native'
 import React, { memo, useCallback, useMemo, useState } from 'react'
 import { useUserStore } from '@/store/userStore';
 import { useRoute } from '@react-navigation/native';
@@ -64,8 +64,9 @@ const RideBooking = () => {
   const handleOptionSelect = useCallback((type: string) => {
     setSelectedOption(type);
   }, [])
-
+  type RideType = 'bike' | 'auto' | 'cabEconomy' | 'cabPremium';
   const handleRideBooking = async () => {
+    console.log('[RideBooking] handleRideBooking start, selectedOption:', selectedOption);
     setLoading(true)
     // await createRide({
     //   vehicle:
@@ -84,62 +85,59 @@ const RideBooking = () => {
     // })
 
     // Calculate distance
-    const distance = Number(
-      calculateDistance(
-        parseFloat(location.latitude),
-        parseFloat(location.longitude),
-        parseFloat(item.drop_latitude),
-        parseFloat(item.drop_longitude)
-      )
-    );
+    try {
+      const distance = Number(
+        calculateDistance(
+          parseFloat(location.latitude),
+          parseFloat(location.longitude),
+          parseFloat(item.drop_latitude),
+          parseFloat(item.drop_longitude)
+        )
+      );
 
-    const farePrices = calculateFare(distance);
+      const farePrices = calculateFare(distance);
 
-    // Determine selected vehicle type
-    const selectedVehicle =
-      selectedOption === 'Cab Economy' ? "cabEconomy"
-        : selectedOption === 'Cab Premium' ? 'cabPremium'
-          : selectedOption === 'Bike' ? "bike"
-            : "auto";
+      const selectedVehicle: RideType =
+        selectedOption === 'Cab Economy' ? 'cabEconomy'
+          : selectedOption === 'Cab Premium' ? 'cabPremium'
+            : selectedOption === 'Bike' ? 'bike'
+              : 'auto';
 
-    // Get fare for selected vehicle
-    const fare = Number(farePrices[selectedVehicle]);
-    if (isNaN(fare) || isNaN(distance)) {
+      const fare = Number(farePrices[selectedVehicle]);
+      if (isNaN(fare) || isNaN(distance)) {
+        console.warn('[RideBooking] invalid fare or distance', { fare, distance });
+        Alert.alert('Error', 'Could not calculate fare or distance. Please try again.');
+        return;
+      }
+
+      const payload = {
+        vehicle: selectedVehicle,
+        drop: {
+          latitude: parseFloat(item.drop_latitude),
+          longitude: parseFloat(item.drop_longitude),
+          address: item?.drop_address,
+        },
+        pickup: {
+          latitude: parseFloat(location.latitude),
+          longitude: parseFloat(location.longitude),
+          address: location.address,
+        },
+        fare: Number(fare),
+        distance: Number(distance)
+      };
+
+      console.log('[RideBooking] calling createRide with payload:', payload);
+      const resp = await createRide(payload);
+      console.log('[RideBooking] createRide response:', resp);
+      router.replace('/customer/liveride');
+    } catch (err: any) {
+      console.error('[RideBooking] handle ride booking error', err);
+      const msg = err?.data?.msg || err?.message || 'Failed to create ride';
+      Alert.alert('Booking failed', String(msg));
+    } finally {
       setLoading(false);
-      alert("Could not calculate fare or distance. Please check locations and try again.");
-      return;
+      console.log('[RideBooking] handleRideBooking finished');
     }
-    console.log({
-      vehicle: selectedVehicle,
-      drop: {
-        latitude: parseFloat(item.drop_latitude),
-        longitude: parseFloat(item.drop_longitude),
-        address: item?.drop_address,
-      },
-      pickup: {
-        latitude: parseFloat(location.latitude),
-        longitude: parseFloat(location.longitude),
-        address: location.address,
-      },
-      fare: Number(fare),
-      distance: Number(distance)
-    });
-    await createRide({
-      vehicle: selectedVehicle,
-      drop: {
-        latitude: parseFloat(item.drop_latitude),
-        longitude: parseFloat(item.drop_longitude),
-        address: item?.drop_address,
-      },
-      pickup: {
-        latitude: parseFloat(location.latitude),
-        longitude: parseFloat(location.longitude),
-        address: location.address,
-      },
-      fare: Number(fare),
-      distance: Number(distance)
-    });
-
   }
   return (
     <View style={rideStyles.container}>

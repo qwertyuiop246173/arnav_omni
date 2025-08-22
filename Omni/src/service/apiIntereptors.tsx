@@ -97,6 +97,7 @@ import { tokenStorage } from "../store/storage";
 import { router } from 'expo-router';
 import { Alert } from 'react-native';
 import { clearAuthAndLogout } from "./authUtils";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 let isRefreshing = false;
 let failedQueue: any[] = [];
@@ -138,60 +139,103 @@ export const apiClient = axios.create({
 // );
 apiClient.interceptors.request.use(
     async (config) => {
-        config.headers['ngrok-skip-browser-warning'] = 'true';
+        try {
+            // Use the proper MMKV API (getString). Avoid calling non-existent `get`.
+            let token: string | null | undefined = undefined;
+            try {
+                if (tokenStorage && typeof (tokenStorage as any).getString === 'function') {
+                    token = (tokenStorage as any).getString('token') ?? undefined;
+                }
+            } catch {
+                // ignore tokenStorage read errors
+            }
+
+            // fallback to AsyncStorage if not found in tokenStorage
+            if (!token) {
+                token = await AsyncStorage.getItem('token');
+            }
+
+            if (token && config.headers) {
+                config.headers.Authorization = `Bearer ${token}`;
+            }
+        } catch (e) {
+            console.warn('[apiClient] token attach error', e);
+        }
         return config;
     },
-    error => Promise.reject(error)
+    (error) => Promise.reject(error)
 );
-apiClient.interceptors.response.use(
-    response => response,
-    async error => {
-        const originalRequest = error.config;
 
-        if (error.response?.status === 401 && !originalRequest._retry) {
-            if (isRefreshing) {
-                return new Promise((resolve, reject) => {
-                    failedQueue.push({ resolve, reject });
-                }).then(token => {
-                    originalRequest.headers.Authorization = `Bearer ${token}`;
-                    return axios(originalRequest);
-                }).catch(err => Promise.reject(err));
+// response interceptor: attempt refresh only if refresh token exists, otherwise reject with auth error
+apiClient.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+        const originalRequest = error.config;
+        const status = error?.response?.status;
+
+        // only handle 401 once per request
+        if (status === 401 && !originalRequest._retry) {
+            originalRequest._retry = true;
+
+            // try to get refresh token
+            let refreshToken: string | null = null;
+            try {
+                if (tokenStorage && typeof tokenStorage.getString === 'function') {
+                    refreshToken = tokenStorage.getString('refresh_token') || null;
+                }
+            } catch { /* ignore */ }
+            if (!refreshToken) {
+                try { refreshToken = await AsyncStorage.getItem('refresh_token'); } catch (e) { /* ignore */ }
             }
 
-            originalRequest._retry = true;
-            isRefreshing = true;
+            // no refresh token -> clear auth storage and reject with auth-required error
+            if (!refreshToken) {
+                try {
+                    await AsyncStorage.removeItem('token');
+                    await AsyncStorage.removeItem('refresh_token');
+                    await AsyncStorage.removeItem('user');
+                    if (tokenStorage && typeof tokenStorage.delete === 'function') {
+                        try { tokenStorage.delete('token'); tokenStorage.delete('refresh_token'); } catch { }
+                    }
+                } catch (e) { /* ignore */ }
+                const authErr = new Error('Authentication required');
+                authErr.name = 'AUTH_REQUIRED';
+                return Promise.reject(authErr);
+            }
 
+            // refresh token exists -> attempt refresh
             try {
-                const refreshToken = tokenStorage.getString("refresh_token");
-                if (!refreshToken) throw new Error("No refresh token");
+                const resp = await axios.post(`${BASE_URL.replace(/\/$/, '')}/auth/refresh-token`, { refresh_token: refreshToken }, { timeout: 15000 });
+                const newAccess = resp.data?.access_token || resp.data?.token || resp.data?.accessToken;
+                const newRefresh = resp.data?.refresh_token || resp.data?.refreshToken;
 
-                const response = await axios.post(`${BASE_URL}/auth/refresh-token`, {
-                    refresh_token: refreshToken
-                });
+                if (newAccess) {
+                    // persist
+                    try { await AsyncStorage.setItem('token', newAccess); } catch { }
+                    try { tokenStorage && typeof tokenStorage.set === 'function' && tokenStorage.set('token', newAccess); } catch { }
+                    if (newRefresh) {
+                        try { await AsyncStorage.setItem('refresh_token', newRefresh); } catch { }
+                        try { tokenStorage && typeof tokenStorage.set === 'function' && tokenStorage.set('refresh_token', newRefresh); } catch { }
+                    }
 
-                if (response.data?.token) {
-                    const newToken = response.data.token;
-                    tokenStorage.set("token", newToken);
-                    originalRequest.headers.Authorization = `Bearer ${newToken}`;
-                    processQueue(null, newToken);
-                    return axios(originalRequest);
+                    // retry original request with new token
+                    originalRequest.headers = originalRequest.headers || {};
+                    originalRequest.headers.Authorization = `Bearer ${newAccess}`;
+                    return apiClient(originalRequest);
                 }
-            } catch (refreshError) {
-                processQueue(refreshError, null);
-                tokenStorage.clearAll();
-                Alert.alert(
-                    "Session Expired",
-                    "Please sign in again to continue",
-                    [{
-                        text: "OK",
-                        onPress: () => router.replace('/role')
-                    }]
-                );
-                return Promise.reject(refreshError);
-            } finally {
-                isRefreshing = false;
+            } catch (refreshErr) {
+                // refresh failed -> clear auth and reject with auth-required
+                try {
+                    await AsyncStorage.removeItem('token');
+                    await AsyncStorage.removeItem('refresh_token');
+                    await AsyncStorage.removeItem('user');
+                } catch (e) { }
+                const authErr = new Error('Authentication required');
+                authErr.name = 'AUTH_REQUIRED';
+                return Promise.reject(authErr);
             }
         }
+
         return Promise.reject(error);
     }
 );
