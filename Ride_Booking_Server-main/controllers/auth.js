@@ -156,3 +156,38 @@ export const refreshToken = async (req, res) => {
         return res.status(StatusCodes.UNAUTHORIZED).json({ message: "Invalid refresh token", error: error.message });
     }
 };
+export const me = async (req, res) => {
+    try {
+        console.log('[auth.me] called, req.user present:', !!req.user)
+        // prefer req.user set by auth middleware
+        let userId = req.user?.id || req.user?._id || req.user?.userId
+
+        // fallback: try to read token from headers if middleware didn't set req.user
+        if (!userId) {
+            const header = req.headers['authorization'] || req.headers['access_token'] || req.headers['x-access-token']
+            if (!header) {
+                console.warn('[auth.me] no auth header or req.user')
+                return res.status(401).json({ message: 'Unauthenticated: no token' })
+            }
+            let token = header
+            if (typeof token === 'string' && token.toLowerCase().startsWith('bearer ')) {
+                token = token.split(/\s+/)[1]
+            }
+            const payload = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET)
+            userId = payload?.userId || payload?.id || payload?._id || payload?.userId
+            console.log('[auth.me] extracted userId from token payload:', userId)
+        }
+
+        const user = await User.findById(userId).select('-password').lean()
+        if (!user) {
+            console.warn('[auth.me] user not found', userId)
+            return res.status(404).json({ message: 'User not found' })
+        }
+
+        console.log('[auth.me] returning user', userId)
+        return res.status(200).json(user)
+    } catch (err) {
+        console.error('[auth.me] error', err)
+        return res.status(401).json({ message: 'Unauthenticated', error: err.message })
+    }
+}

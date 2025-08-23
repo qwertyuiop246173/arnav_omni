@@ -1,4 +1,4 @@
-import { View, Platform, ActivityIndicator, Alert } from 'react-native'
+import { View, Platform, ActivityIndicator, Alert, Text, TouchableOpacity } from 'react-native'
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { screenHeight } from '@/utils/Constants'
 import { UseWS } from '@/service/WSProvider'
@@ -22,7 +22,9 @@ const LiveRide = () => {
     const route = useRoute() as any
     const params = route?.params || {}
     const id = params.id
-    const bottomSheetRef = useRef(null)
+    // const bottomSheetRef = useRef(null)
+    const bottomSheetRef = useRef<any>(null)
+    const [offers, setOffers] = useState<any[]>([])
     const snapPoints = useMemo(() => Platform.OS === 'ios' ? iosHeights : androidHeights, [])
     const [mapHeight, setMapHeight] = useState(snapPoints[0])
     const handleSheetChanges = useCallback((index: number) => {
@@ -74,6 +76,7 @@ const LiveRide = () => {
     //         off('riderLocationUpdate')
     //     }
     // }, [rideData])
+    // hydrate from navigation param (fast UI)
     useEffect(() => {
         if (!params?.ride) return
         try {
@@ -88,6 +91,8 @@ const LiveRide = () => {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [params?.ride])
+
+    // subscribe to ride via socket and register handlers
     useEffect(() => {
         let mounted = true
         console.log('[LiveRide] subscribe effect start, id=', id)
@@ -191,6 +196,116 @@ const LiveRide = () => {
         }
     }, [rideData, emit, on, off])
 
+    // handle incoming offers (from riders via server)
+    useEffect(() => {
+        if (!id) return
+        console.log('[LiveRide] registering offer listeners for ride', id)
+
+        const handleRideOffer = (offer: any) => {
+            try {
+                console.log('[LiveRide] ride:offer received', offer)
+                const normalized = {
+                    _id: offer?.rideId || offer?.ride?._id || Math.random().toString(),
+                    riderId: offer?.riderId || offer?.fromSocket || offer?.rider?._id || offer?.from,
+                    price: Number(offer?.price ?? offer?.fare ?? 0),
+                    riderInfo: offer?.rider ?? offer?.from ?? null,
+                    raw: offer
+                }
+                setOffers(prev => {
+                    if (prev.some(p => p._id === normalized._id && p.riderId === normalized.riderId)) {
+                        console.log('[LiveRide] duplicate offer ignored', normalized._id)
+                        return prev
+                    }
+                    console.log('[LiveRide] appending offer', normalized)
+                    return [normalized, ...prev]
+                })
+                // quick notification
+                Alert.alert('New Offer', `Offer ₹${normalized.price}`)
+            } catch (e) {
+                console.warn('[LiveRide] handleRideOffer error', e)
+            }
+        }
+
+        const handleRideAccepted = (payload: any) => {
+            try {
+                console.log('[LiveRide] ride:accepted received', payload)
+                const rideObj = payload?.ride ?? payload
+                if (!rideObj) return
+                setRideData(rideObj)
+                // clear any pending offers for this ride
+                setOffers([])
+                // open bottom sheet so UI transitions to LiveTrackingSheet
+                try {
+                    bottomSheetRef.current?.snapToIndex?.(1)
+                    console.log('[LiveRide] bottom sheet opened after ride:accepted')
+                } catch (e) {
+                    console.warn('[LiveRide] open bottom sheet failed', e)
+                }
+            } catch (e) {
+                console.warn('[LiveRide] handleRideAccepted error', e)
+            }
+        }
+
+        on && on('ride:offer', handleRideOffer)
+        on && on('ride:accepted', handleRideAccepted)
+        on && on('ride:offer:legacy', handleRideOffer)
+
+        return () => {
+            try {
+                off && off('ride:offer')
+                off && off('ride:accepted')
+                off && off('ride:offer:legacy')
+                console.log('[LiveRide] removed offer listeners')
+            } catch (e) {
+                console.warn('[LiveRide] cleanup offer listeners error', e)
+            }
+        }
+    }, [id, on, off, emit])
+
+    // accept an offer (customer)
+    const acceptOffer = (offer: any) => {
+        try {
+            console.log('[LiveRide] customer accepting offer', offer)
+            if (!id) {
+                console.warn('[LiveRide] cannot accept offer, missing ride id')
+                return
+            }
+            emit && emit('customer:accept_offer', { rideId: id, riderId: offer.riderId })
+            // remove accepted offer from UI
+            setOffers(prev => prev.filter(o => o._id !== offer._id || o.riderId !== offer.riderId))
+            console.log('[LiveRide] emitted customer:accept_offer', { rideId: id, riderId: offer.riderId })
+        } catch (e) {
+            console.error('[LiveRide] acceptOffer error', e)
+            Alert.alert('Error', 'Failed to accept offer. Try again.')
+        }
+    }
+
+    // open bottom sheet when rideData arrives
+    useEffect(() => {
+        if (!rideData) return
+        console.log('[LiveRide] rideData available -> opening bottom sheet if possible', rideData?.status)
+        const t = setTimeout(() => {
+            try {
+                bottomSheetRef.current?.snapToIndex?.(1)
+                console.log('[LiveRide] bottomSheet snapToIndex(1) called')
+            } catch (e) {
+                try {
+                    bottomSheetRef.current?.expand?.()
+                    console.log('[LiveRide] bottomSheet expand called')
+                } catch (e2) {
+                    console.warn('[LiveRide] bottomSheet open failed', e2)
+                }
+            }
+        }, 50)
+        return () => clearTimeout(t)
+    }, [rideData])
+
+    // parse coordinates safely with fallback
+    const parseCoord = (v: any) => {
+        if (v === null || v === undefined) return 0
+        const n = typeof v === 'number' ? v : parseFloat(String(v))
+        return Number.isFinite(n) ? n : 0
+    }
 
     return (
 
@@ -205,16 +320,22 @@ const LiveRide = () => {
                     height={mapHeight}
                     status={rideData?.status}
                     drop={{
-                        latitude: parseFloat(rideData?.drop?.latitude),
-                        longitude: parseFloat(rideData?.pickup?.longitude)
+                        // latitude: parseFloat(rideData?.drop?.latitude),
+                        // longitude: parseFloat(rideData?.drop?.longitude)
+                        latitude: parseCoord(rideData?.drop?.latitude),
+                        longitude: parseCoord(rideData?.drop?.longitude)
                     }}
                     pickup={{
-                        latitude: parseFloat(rideData?.pickup?.latitude),
-                        longitude: parseFloat(rideData?.pickup?.longitude)
+                        // latitude: parseFloat(rideData?.pickup?.latitude),
+                        // longitude: parseFloat(rideData?.pickup?.longitude)
+                        latitude: parseCoord(rideData?.pickup?.latitude),
+                        longitude: parseCoord(rideData?.pickup?.longitude)
                     }}
                     rider={riderCoords ? {
-                        latitude: riderCoords.latitude,
-                        longitude: riderCoords.longitude,
+                        // latitude: riderCoords.latitude,
+                        // longitude: riderCoords.longitude,
+                        latitude: parseCoord(riderCoords.latitude),
+                        longitude: parseCoord(riderCoords.longitude),
                         heading: riderCoords.heading
                     } : {}} />
             )}
@@ -240,7 +361,36 @@ const LiveRide = () => {
                     <CustomText variant='h8'> Fetching Information ... </CustomText>
                     <ActivityIndicator color='black' size='small' />
                 </View>)
-            }
+            } {/* Offers overlay - minimal UI change (does not alter main layout) */}
+            {offers.length > 0 && (
+                <View style={{
+                    position: 'absolute',
+                    bottom: 110,
+                    left: 12,
+                    right: 12,
+                    zIndex: 999,
+                    backgroundColor: '#fff',
+                    padding: 10,
+                    borderRadius: 8,
+                    elevation: 6
+                }}>
+                    {offers.map(offer => (
+                        <View key={`${offer._id}_${offer.riderId}`} style={{
+                            flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 6
+                        }}>
+                            <View style={{ flex: 1 }}>
+                                <Text style={{ fontWeight: '600' }}>Offer: ₹{Number(offer.price ?? 0).toFixed(2)}</Text>
+                                <Text style={{ fontSize: 12, color: '#444' }}>Rider: {offer.riderInfo?.name ?? offer.riderId ?? 'Unknown'}</Text>
+                            </View>
+                            <TouchableOpacity
+                                onPress={() => acceptOffer(offer)}
+                                style={{ backgroundColor: '#228B22', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, marginLeft: 8 }}>
+                                <Text style={{ color: '#fff', fontWeight: '600' }}>Accept</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ))}
+                </View>
+            )}
         </View>
     )
 }

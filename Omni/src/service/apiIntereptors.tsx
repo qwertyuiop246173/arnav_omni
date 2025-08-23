@@ -137,34 +137,25 @@ export const apiClient = axios.create({
 //     },
 //     error => Promise.reject(error)
 // );
-apiClient.interceptors.request.use(
-    async (config) => {
-        try {
-            // Use the proper MMKV API (getString). Avoid calling non-existent `get`.
-            let token: string | null | undefined = undefined;
-            try {
-                if (tokenStorage && typeof (tokenStorage as any).getString === 'function') {
-                    token = (tokenStorage as any).getString('token') ?? undefined;
-                }
-            } catch {
-                // ignore tokenStorage read errors
-            }
+apiClient.interceptors.request.use(async (config) => {
+    try {
+        const token =
+            (tokenStorage as any)?.getString?.('access_token') ||
+            (tokenStorage as any)?.getString?.('accessToken') ||
+            (tokenStorage as any)?.getString?.('token') ||
+            (await AsyncStorage.getItem('accessToken')) ||
+            (await AsyncStorage.getItem('token')) ||
+            null
 
-            // fallback to AsyncStorage if not found in tokenStorage
-            if (!token) {
-                token = await AsyncStorage.getItem('token');
-            }
-
-            if (token && config.headers) {
-                config.headers.Authorization = `Bearer ${token}`;
-            }
-        } catch (e) {
-            console.warn('[apiClient] token attach error', e);
+        console.log('[apiInterceptors] attaching token present=', !!token)
+        if (token && config.headers) {
+            config.headers.Authorization = `Bearer ${token}`
         }
-        return config;
-    },
-    (error) => Promise.reject(error)
-);
+    } catch (e) {
+        console.warn('[apiInterceptors] token attach failed', e)
+    }
+    return config
+})
 
 // response interceptor: attempt refresh only if refresh token exists, otherwise reject with auth error
 apiClient.interceptors.response.use(

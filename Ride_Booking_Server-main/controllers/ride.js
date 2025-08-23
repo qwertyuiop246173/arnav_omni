@@ -64,32 +64,118 @@ import {
 //     throw new BadRequestError("Failed to create ride");
 //   }
 // };
+
+
+// export const createRide = async (req, res) => {
+//   try {
+//     const { vehicle, pickup, drop, fare, distance } = req.body;
+//     if (!vehicle || !pickup || !drop || fare === undefined || distance === undefined) {
+//       throw new BadRequestError("Vehicle, pickup, drop, fare, and distance are required");
+//     }
+//     console.log('Ride creation payload:', req.body); // <-- Add this line
+//     // Add customer ID from authenticated user
+//     const ride = await Ride.create({
+//       customer: req.user.userId,  // This comes from auth middleware
+//       vehicle,
+//       pickup,
+//       drop,
+//       fare,
+//       distance,
+//     });
+
+//     console.log('Created ride:', ride);
+//     res.status(StatusCodes.CREATED).json({ ride });
+//   } catch (error) {
+//     console.error('Create ride error:', error);
+//     res.status(StatusCodes.BAD_REQUEST).json({
+//       msg: error.message || 'Failed to create ride'
+//     });
+//   }
+// };
+const generateOtp = () => {
+  return Math.floor(1000 + Math.random() * 9000).toString()
+}
 export const createRide = async (req, res) => {
   try {
-    const { vehicle, pickup, drop, fare, distance } = req.body;
-    if (!vehicle || !pickup || !drop || fare === undefined || distance === undefined) {
-      throw new BadRequestError("Vehicle, pickup, drop, fare, and distance are required");
-    }
-    console.log('Ride creation payload:', req.body); // <-- Add this line
-    // Add customer ID from authenticated user
-    const ride = await Ride.create({
-      customer: req.user.userId,  // This comes from auth middleware
-      vehicle,
-      pickup,
-      drop,
-      fare,
-      distance,
-    });
+    console.log('[ride.create] incoming body:', req.body)
+    // prefer authenticated user id from middleware
+    const customerId = req.user?.userId || req.user?.id || req.user?._id || null
 
-    console.log('Created ride:', ride);
-    res.status(StatusCodes.CREATED).json({ ride });
-  } catch (error) {
-    console.error('Create ride error:', error);
-    res.status(StatusCodes.BAD_REQUEST).json({
-      msg: error.message || 'Failed to create ride'
-    });
+    const { vehicle, pickup, drop, fare: bodyFare, distance: bodyDistance } = req.body || {}
+
+    // collect missing fields for clear response
+    const missing = []
+    if (!vehicle) missing.push('vehicle')
+    if (!pickup || !pickup.address || pickup.latitude == null || pickup.longitude == null) missing.push('pickup.{address,latitude,longitude}')
+    if (!drop || !drop.address || drop.latitude == null || drop.longitude == null) missing.push('drop.{address,latitude,longitude}')
+    if (!customerId) missing.push('authenticated customer (req.user)')
+
+    if (missing.length) {
+      console.warn('[ride.create] validation failed, missing:', missing)
+      return res.status(400).json({ message: 'Missing required fields', missing })
+    }
+
+    // compute distance/fare if not provided and coordinates available
+    let distance = bodyDistance
+    let fare = bodyFare
+    try {
+      if ((distance === undefined || fare === undefined) && pickup && drop) {
+        const pLat = Number(pickup.latitude)
+        const pLng = Number(pickup.longitude)
+        const dLat = Number(drop.latitude)
+        const dLng = Number(drop.longitude)
+        if (Number.isFinite(pLat) && Number.isFinite(pLng) && Number.isFinite(dLat) && Number.isFinite(dLng)) {
+          distance = calculateDistance(pLat, pLng, dLat, dLng)
+          const fares = calculateFare(distance, vehicle)
+          fare = fares && fares[vehicle] ? fares[vehicle] : (bodyFare ?? 0)
+          console.log('[ride.create] calculated distance & fare', { distance, fare })
+        }
+      }
+    } catch (e) {
+      console.warn('[ride.create] distance/fare calc failed', e)
+    }
+
+    // build ride payload
+    const ridePayload = {
+      vehicle,
+      pickup: {
+        address: pickup.address,
+        latitude: Number(pickup.latitude),
+        longitude: Number(pickup.longitude)
+      },
+      drop: {
+        address: drop.address,
+        latitude: Number(drop.latitude),
+        longitude: Number(drop.longitude)
+      },
+      customer: customerId,
+      distance: distance ?? 0,
+      fare: fare ?? 0,
+      status: 'SEARCHING_FOR_RIDER',
+      otp: generateOTP()
+    }
+
+    console.log('[ride.create] creating ride with payload (otp generated):', {
+      vehicle: ridePayload.vehicle,
+      customer: ridePayload.customer,
+      otp: ridePayload.otp,
+      distance: ridePayload.distance,
+      fare: ridePayload.fare
+    })
+
+    const ride = new Ride(ridePayload)
+    const saved = await ride.save()
+    console.log('[ride.create] ride saved id=', saved._id)
+
+    const populated = await Ride.findById(saved._id).populate('customer').lean().exec()
+    console.log('[ride.create] returning ride to client with otp=', populated?.otp)
+
+    return res.status(StatusCodes.CREATED).json({ ride: populated })
+  } catch (err) {
+    console.error('[ride.create] error', err)
+    return res.status(500).json({ message: 'Failed to create ride', error: err.message })
   }
-};
+}
 export const acceptRide = async (req, res) => {
   const riderId = req.user.id;
   const { rideId } = req.params;

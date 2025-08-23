@@ -4,7 +4,9 @@ import User from "../models/User.js";
 import Ride from "../models/Ride.js";
 
 const onDutyRiders = new Map(); // key: userId -> { socketId, coords, vehicle }
-
+const generateOtp = () => {
+  return Math.floor(1000 + Math.random() * 9000).toString()
+}
 const handleSocketConnection = (io) => {
   // auth middleware
   io.use(async (socket, next) => {
@@ -72,6 +74,61 @@ const handleSocketConnection = (io) => {
         console.log(`[sockets] rider ${user.id} goOnDuty socket=${socket.id} coords=${JSON.stringify(entry.coords)} vehicle=${entry.vehicle}`);
         updateNearbyriders();
       });
+      socket.on('customer:accept_offer', async (payload) => {
+        try {
+          console.log('[sockets] customer:accept_offer received from', socket.id, 'payload:', payload);
+          const customerId = socket.user?.id;
+          const { rideId, riderId } = payload || {};
+          if (!rideId || !riderId) {
+            console.warn('[sockets] customer:accept_offer missing rideId or riderId', payload);
+            return socket.emit('error', { message: 'Missing rideId or riderId' });
+          }
+
+          // update ride: assign rider and mark as ARRIVING
+          const updated = await Ride.findByIdAndUpdate(
+            rideId,
+            {
+              $set: {
+                rider: riderId,
+                status: 'ARRIVING',
+                acceptedByCustomerAt: new Date()
+              }
+            },
+            { new: true }
+          ).populate('rider customer').lean().exec();
+
+          if (!updated) {
+            console.warn('[sockets] customer:accept_offer ride not found', rideId);
+            return socket.emit('error', { message: 'Ride not found' });
+          }
+
+          console.log('[sockets] customer:accept_offer updated ride', rideId, 'status ->', updated.status);
+
+          // emit updated ride to any listeners subscribed to ride room
+          io.to(`ride:${rideId}`).emit('rideData', { ride: updated });
+          console.log('[sockets] emitted rideData to room ride:' + rideId);
+
+          // notify customer socket who accepted (ack)
+          io.to(socket.id).emit('ride:accepted:ack', { ride: updated });
+          console.log('[sockets] sent ride:accepted:ack to customer', socket.id);
+
+          // notify the chosen rider (if onDuty map has socketId) via helper getRiderSocket (defined below in this file)
+          try {
+            const riderSocketInstance = getRiderSocket(riderId); // helper in this file returns socket instance or null
+            if (riderSocketInstance) {
+              riderSocketInstance.emit('ride:assigned', { ride: updated, byCustomer: customerId });
+              console.log('[sockets] notified rider', riderId, 'socket', riderSocketInstance.id, 'about assignment');
+            } else {
+              console.log('[sockets] rider socket not found for riderId', riderId);
+            }
+          } catch (err) {
+            console.warn('[sockets] notify rider failed', err);
+          }
+        } catch (err) {
+          console.error('[sockets] customer:accept_offer error', err);
+          socket.emit('error', { message: 'Failed to accept offer', error: err?.message });
+        }
+      });
 
       // go off duty: remove from map & leave rooms
       socket.on("goOffDuty", () => {
@@ -98,6 +155,47 @@ const handleSocketConnection = (io) => {
           socket.to(`rider_${user.id}`).emit("riderLocationUpdate", { riderId: user.id, coords });
         }
       });
+      socket.on('offer:accept', async (payload) => {
+        console.log('[sockets] offer:accept received from', socket.id, 'payload=', payload)
+        try {
+          console.log('[sockets] offer:accept', payload, 'from', socket.id)
+          const { rideId, riderId, price } = payload || {}
+          if (!rideId || !riderId) return socket.emit('error', { message: 'Missing rideId or riderId in offer accept' })
+          // generate OTP and log it
+          const otp = generateOtp()
+          console.log('[sockets] generated OTP', otp, 'for ride', rideId)
+          // assign rider and mark ARRIVING
+          const updated = await Ride.findByIdAndUpdate(
+            rideId,
+            {
+              $set: {
+                rider: riderId,
+                status: 'ARRIVING',
+                otp,
+                acceptedOffer: { rider: riderId, price, acceptedAt: new Date() }
+              }
+            },
+            { new: true }
+          ).populate('rider customer').lean().exec()
+
+          if (!updated) return socket.emit('error', { message: 'Ride not found' })
+          console.log('[sockets] offer:accept updated ride', updated._id, 'status->', updated.status)
+          // notify room and customer
+          io.to(`ride:${rideId}`).emit('rideData', { ride: updated })
+          console.log('[sockets] emitted rideData to room ride:' + rideId)
+          if (payload.customerSocketId) {
+            io.to(payload.customerSocketId).emit('ride:accepted', { ride: updated })
+            console.log('[sockets] emitted ride:accepted to customer socket', payload.customerSocketId)
+          }
+          // ack to rider
+          io.to(socket.id).emit('offer:accepted:ack', { ride: updated })
+          console.log('[sockets] sent offer:accepted:ack to rider socket', socket.id)
+          console.log('[sockets] offer accepted -> ARRIVING', rideId)
+        } catch (err) {
+          console.error('[sockets] offer:accept error', err)
+          socket.emit('error', { message: 'Failed to accept offer' })
+        }
+      })
 
       // rider selects which vehicle they will use (bike/auto/cab etc.)
       socket.on("rider:setVehicle", (vehicle) => {

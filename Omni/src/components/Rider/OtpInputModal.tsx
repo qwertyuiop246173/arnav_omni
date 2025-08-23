@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, Modal, TextInput, Touchable, TouchableOpacity } from 'react-native'
+import { View, Text, StyleSheet, Modal, TextInput, TouchableOpacity } from 'react-native'
 import React, { FC, memo, useRef, useState } from 'react'
 import { modalStyles } from '@/styles/modalStyles'
 
