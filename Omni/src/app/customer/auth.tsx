@@ -93,74 +93,47 @@ import { UseWS } from '@/service/WSProvider';
 import PhoneInput from '@/components/shared/PhoneInput';
 import { router } from 'expo-router'
 import { BASE_URL } from '@/service/config';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const Auth = () => {
   const { updateAccessToken } = UseWS();
   const [phone, setPhone] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  const fetchWithTimeout = (url: string, options: RequestInit, timeout = 30000): Promise<Response> => {
-    return Promise.race([
-      fetch(url, options),
-      new Promise<Response>((_, reject) =>
-        setTimeout(() => reject(new Error('fetch-timeout')), timeout)
-      )
-    ]) as Promise<Response>;
-  };
+
+
   const handleSignIn = async () => {
-    console.log('Phone value being sent:', phone);
-    if (!phone) {
-      Alert.alert('Invalid', 'Phone is empty');
+    if (!phone || phone.length !== 10) {
+      Alert.alert("Invalid", "Enter a valid 10-digit phone number");
       return;
     }
-
-    const signUrl = `${BASE_URL}/auth/signin`;
-    console.log('Sign-in URL:', signUrl);
     setIsLoading(true);
 
     try {
-      // quick reachability ping to the base ngrok host (short timeout)
-      try {
-        const pingUrl = signUrl.replace(/\/auth\/signin$/, '/'); // hits root of tunnel
-        console.log('Pinging tunnel:', pingUrl);
-        const ping = await fetchWithTimeout(pingUrl, { method: 'GET' }, 5000);
-        console.log('Ping response status:', ping.status);
-      } catch (pingErr) {
-        console.warn('Tunnel ping failed:', pingErr);
-        throw new Error('Cannot reach backend tunnel from device. Check ngrok / network.');
-      }
-
-      console.log('Starting sign-in request...');
-      const response = await fetchWithTimeout(signUrl, {
+      const response = await fetch(`${BASE_URL}/auth/signin`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: JSON.stringify({ phone, role: 'customer' }),
-      }, 30000);
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, role: 'customer' })
+      });
 
-      console.log('Fetch resolved:', response);
-      console.log('Response ok:', response.ok, 'status:', response.status);
-      const contentType = response.headers.get('content-type') || '';
-      const data = contentType.includes('application/json') ? await response.json() : await response.text();
-      console.log('Parsed backend response:', data);
-
-      if (response.ok && data && (data as any).token) {
-        updateAccessToken((data as any).token);
-        router.push('/customer/home');
-        return;
+      const data = await response.json();
+      if (response.ok && data?.token) {
+        await AsyncStorage.setItem('token', data.token);   // persist
+        updateAccessToken(data.token);                     // for sockets
+        router.replace('/customer/home');                  // go to home
+      } else {
+        Alert.alert("Login failed", data?.message || "Unknown error");
       }
-
-      Alert.alert('Sign-in failed', typeof data === 'string' ? data : ((data as any).message || 'Unknown error'));
-
     } catch (err: any) {
-      console.error('Sign-in fetch error:', err);
-      Alert.alert('Sign-in error', err.message || String(err));
+      Alert.alert("Error", err.message || "Something went wrong");
     } finally {
       setIsLoading(false);
     }
   };
+
+
+
+
   return (
     <SafeAreaView style={authStyles.container}>
       <ScrollView contentContainerStyle={authStyles.container}>
@@ -183,13 +156,6 @@ const Auth = () => {
           onChangeText={setPhone}
         />
       </ScrollView>
-      <View>
-        <Button
-          title='NEXT'
-          onPress={() => router.navigate('/customer/home')}
-        />
-      </View>
-
       <View style={authStyles.footerContainer}>
         <CustomText fontFamily='Regular' variant='h8' style={[commonStyles.lightText, { textAlign: 'center', marginHorizontal: 20 }]}>
           By continuing, you agree to our Terms of Service and Privacy Policy.

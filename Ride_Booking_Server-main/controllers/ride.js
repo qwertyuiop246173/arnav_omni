@@ -128,6 +128,20 @@ export const acceptRide = async (req, res) => {
   }
 };
 
+export const getRideById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ message: 'Missing ride id' });
+
+    const ride = await Ride.findById(id).populate('customer rider').lean().exec();
+    if (!ride) return res.status(404).json({ message: 'Ride not found' });
+
+    return res.status(200).json({ ride });
+  } catch (err) {
+    console.error('[controllers/ride] getRideById error', err);
+    return next(err);
+  }
+};
 export const updateRideStatus = async (req, res) => {
   const { rideId } = req.params;
   const { status } = req.body;

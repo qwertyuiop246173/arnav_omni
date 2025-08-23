@@ -43,13 +43,28 @@ interface RidePayload {
 export const createRide = async (payload: any) => {
     console.log('[rideService] createRide payload:', payload);
 
-    // quick pre-check: ensure access token exists
-    const token = (await AsyncStorage.getItem('token')) || null;
-    console.log('[rideService] access token present:', !!token);
-    if (!token) {
-        const err: any = new Error('Not authenticated. Please sign in.');
-        err.name = 'AUTH_REQUIRED';
-        throw err;
+    // Ensure apiClient has Authorization header set if possible
+    try {
+        let storedToken: string | null | undefined = undefined;
+        try {
+            storedToken = (tokenStorage && typeof (tokenStorage as any).getString === 'function')
+                ? (tokenStorage as any).getString('token')
+                : undefined;
+        } catch { /* ignore */ }
+
+        if (!storedToken) {
+            storedToken = await AsyncStorage.getItem('token');
+        }
+
+        if (storedToken) {
+            console.log('[rideService] attaching token to apiClient');
+            apiClient.defaults.headers = apiClient.defaults.headers || {};
+            (apiClient.defaults.headers as any).Authorization = `Bearer ${storedToken}`;
+        } else {
+            console.log('[rideService] no token found in storage before createRide');
+        }
+    } catch (e) {
+        console.warn('[rideService] token attach attempt failed', e);
     }
 
     // try likely endpoints
@@ -71,7 +86,58 @@ export const createRide = async (payload: any) => {
     finalErr.data = lastErr;
     throw finalErr;
 };
+export const getRide = async (id: string) => {
+    console.log('[rideService] getRide id:', id);
+    const candidatePaths = [
+        `/ride/${id}`,
+        `/ride/get/${id}`,
+        `/ride/find/${id}`,
+        `/ride/details/${id}`,
+    ];
+    try {
+        // try direct candidate paths first
+        for (const path of candidatePaths) {
+            try {
+                console.log('[rideService] trying GET', path);
+                const res = await apiClient.get(path);
+                console.log('[rideService] getRide status:', res.status, 'data:', res.data);
+                if (res.data) {
+                    // normalize to { ride: ... } shape
+                    if (res.data.ride) return res.data;
+                    return { ride: res.data };
+                }
+            } catch (err: any) {
+                console.warn('[rideService] path failed', path, err?.response?.data?.message || err?.message || err);
+                // if 404 try next
+                const status = err?.response?.status;
+                if (status && status !== 404) throw err;
+            }
+        }
 
+        // try query param style as a last attempt
+        try {
+            console.log('[rideService] trying GET /ride?id= query');
+            const res = await apiClient.get(`/ride`, { params: { id } });
+            console.log('[rideService] getRide (query) status:', res.status, 'data:', res.data);
+            if (res.data) {
+                if (res.data.ride) return res.data;
+                return { ride: res.data };
+            }
+        } catch (err: any) {
+            console.warn('[rideService] query style failed', err?.response?.data?.message || err?.message || err);
+            const status = err?.response?.status;
+            if (status && status !== 404) throw err;
+        }
+
+        // nothing worked
+        const err: any = new Error('Route does not exist for fetching ride');
+        err.status = 404;
+        throw err;
+    } catch (err: any) {
+        console.error('[rideService] getRide error', err?.response?.data || err.message || err);
+        throw err;
+    }
+};
 export const getMyRides = async (isCustomer: boolean = true) => {
     try {
         const token = tokenStorage.getString('token');

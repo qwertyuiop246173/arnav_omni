@@ -14,6 +14,8 @@ import { router } from 'expo-router';
 import { commonStyles } from '@/styles/commonStyles';
 import CustomButton from '@/components/shared/customButton';
 import { createRide } from '@/service/rideService';
+import { UseWS } from '@/service/WSProvider';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 const RideBooking = () => {
 
 
@@ -23,6 +25,7 @@ const RideBooking = () => {
   const [selectedOption, setSelectedOption] = useState("Bike");
   const [loading, setLoading] = useState(false);
 
+  const { emit } = UseWS() as any;
   const farePrices = useMemo(() => calculateFare(parseFloat(item?.distanceInKm)), [item?.distanceInKm]);
 
   const rideOptions = useMemo(() => [
@@ -94,8 +97,9 @@ const RideBooking = () => {
           parseFloat(item.drop_longitude)
         )
       );
+      console.log('[RideBooking] calculated distance:', distance);
 
-      const farePrices = calculateFare(distance);
+      const farePricesLocal = calculateFare(distance);
 
       const selectedVehicle: RideType =
         selectedOption === 'Cab Economy' ? 'cabEconomy'
@@ -103,10 +107,13 @@ const RideBooking = () => {
             : selectedOption === 'Bike' ? 'bike'
               : 'auto';
 
-      const fare = Number(farePrices[selectedVehicle]);
+      const fare = Number(farePricesLocal[selectedVehicle]);
+      console.log('[RideBooking] selectedVehicle:', selectedVehicle, 'fare:', fare);
+
       if (isNaN(fare) || isNaN(distance)) {
         console.warn('[RideBooking] invalid fare or distance', { fare, distance });
         Alert.alert('Error', 'Could not calculate fare or distance. Please try again.');
+        setLoading(false);
         return;
       }
 
@@ -127,16 +134,42 @@ const RideBooking = () => {
       };
 
       console.log('[RideBooking] calling createRide with payload:', payload);
+
+      // create ride on server
       const resp = await createRide(payload);
       console.log('[RideBooking] createRide response:', resp);
-      router.replace('/customer/liveride');
+
+      const ride = resp?.ride ?? resp;
+      const rideId = ride?._id || ride?.id;
+      console.log('[RideBooking] created rideId:', rideId);
+
+      // navigate to LiveRide and pass ride object so UI shows immediately (no fetch)
+      try {
+        console.log('[RideBooking] navigating to LiveRide with ride object');
+        router.replace({
+          pathname: '/customer/liveride',
+          params: { id: rideId, ride: JSON.stringify(ride) }
+        });
+      } catch (e) {
+        console.warn('[RideBooking] navigation with ride object failed, falling back to id-only', e);
+        router.replace({ pathname: '/customer/liveride', params: { id: rideId } });
+      }
+
+      // also emit ride:searching with full ride payload so riders that expect payload receive it
+      try {
+        console.log('[RideBooking] emitting ride:searching with ride payload');
+        emit && emit('ride:searching', { rideId, ride, vehicle: ride.vehicle });
+      } catch (e) {
+        console.warn('[RideBooking] emit ride:searching error', e);
+      }
+
+      console.log('[RideBooking] handleRideBooking finished - waiting for offers');
     } catch (err: any) {
       console.error('[RideBooking] handle ride booking error', err);
       const msg = err?.data?.msg || err?.message || 'Failed to create ride';
       Alert.alert('Booking failed', String(msg));
     } finally {
       setLoading(false);
-      console.log('[RideBooking] handleRideBooking finished');
     }
   }
   return (

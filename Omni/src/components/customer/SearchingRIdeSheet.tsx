@@ -18,7 +18,7 @@ interface RideItem {
     drop?: { address: string }
     fare?: number
 }
-const SearchingRIdeSheet: FC<{ item: RideItem }> = ({ item }) => {
+const SearchingRideSheet: FC<{ item: RideItem }> = ({ item }) => {
     const { emit } = UseWS()
     return (
         <View>
@@ -80,6 +80,7 @@ const SearchingRIdeSheet: FC<{ item: RideItem }> = ({ item }) => {
                     style={rideStyles?.cancelButton}
                     onPress={() => {
                         emit('CANCEL RIDE', item?._id)
+                        router.replace('/customer/home')
                         console.log('Ride cancelled:', item?._id)
                     }}>
                     <CustomText style={rideStyles?.cancelButtonText}>Cancel</CustomText>
@@ -94,4 +95,4 @@ const SearchingRIdeSheet: FC<{ item: RideItem }> = ({ item }) => {
     )
 }
 
-export default SearchingRIdeSheet
+export default SearchingRideSheet
