@@ -20,6 +20,6 @@ const LOCAL_IP = '45.118.48.2'; // <-- Change this to your actual IP
 // const DEV_IOS_URL = `http://${LOCAL_IP}:21651/api`;      // For iOS Device/Simulator
 // const PROD_URL = 'https://your-production-url.com/api';  // For Production
 
-export const BASE_URL = 'https://b5aa6840b972.ngrok-free.app/api';
+export const BASE_URL = 'https://eaf37bf9ffdf.ngrok-free.app/api';
 
 export const SOCKET_URL = BASE_URL.replace('/api', '');

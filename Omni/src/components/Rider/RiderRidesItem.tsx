@@ -51,36 +51,8 @@ const RiderRidesItem: FC<{ item: RideItem; removeIt: () => void }> = ({ item, re
                         <CustomText fontSize={11} numberOfLines={1} fontFamily='SemiBold'>{item?.pickup?.address?.slice(0, 10)}</CustomText>
                         <CustomText fontSize={9.5} numberOfLines={2} fontFamily='Medium'>{item?.pickup?.address}</CustomText>
                     </View>
-                    <View style={commonStyles?.flexRowGap}>
-                        <View>
-                            <CustomText
-                                fontFamily='Medium'
-                                fontSize={9}
-                                style={orderStyles.label}>Pickup</CustomText>
-                            <CustomText fontFamily='SemiBold' fontSize={11}>
-                                {(location &&
-                                    calculateDistance(
-                                        item?.pickup?.latitude ?? 0,
-                                        item?.pickup?.longitude ?? 0,
-                                        location?.latitude ?? 0,
-                                        location?.longitude ?? 0,
-                                    ).toFixed(2)) ||
-                                    "--"}{""}Km
-                            </CustomText>
-                        </View>
-                        <View style={orderStyles.borderLine}>
-                            <CustomText
-                                fontSize={9}
-                                fontFamily='Medium'
-                                style={orderStyles.label}>Drop</CustomText>
-                            <CustomText
-                                fontSize={11}
-                                fontFamily='SemiBold'>
-                                {item?.distance.toFixed(2)} Km
-                            </CustomText>
-                        </View>
-                    </View>
-
+                </View>
+                <View>
                     <View style={orderStyles?.flexRowBase}>
                         <View style={orderStyles?.dropHollowCircle} />
                         <View style={orderStyles?.infoText}>
@@ -95,12 +67,41 @@ const RiderRidesItem: FC<{ item: RideItem; removeIt: () => void }> = ({ item, re
                     </View>
                 </View>
             </View>
+            <View style={[commonStyles?.flexRowGap]}>
+                <View>
+                    <CustomText
+                        fontFamily='Medium'
+                        fontSize={9}
+                        style={orderStyles.label}>Pickup</CustomText>
+                    <CustomText fontFamily='SemiBold' fontSize={11}>
+                        {(location &&
+                            calculateDistance(
+                                item?.pickup?.latitude ?? 0,
+                                item?.pickup?.longitude ?? 0,
+                                location?.latitude ?? 0,
+                                location?.longitude ?? 0,
+                            ).toFixed(2)) ||
+                            "--"}{""}Km
+                    </CustomText>
+                </View>
+                <View style={orderStyles.borderLine}>
+                    <CustomText
+                        fontSize={9}
+                        fontFamily='Medium'
+                        style={orderStyles.label}>Drop</CustomText>
+                    <CustomText
+                        fontSize={11}
+                        fontFamily='SemiBold'>
+                        {item?.distance.toFixed(2)} Km
+                    </CustomText>
+                </View>
+            </View>
             <View style={orderStyles?.flexRowEnd}>
                 <TouchableOpacity>
                     <Ionicons name="close-circle" size={24} color="black" />
                 </TouchableOpacity>
                 <CounterButton
-                    title='Accept Ride'
+                    title='Accept'
                     onCountdownEnd={removeIt}
                     initialCount={12}
                     onPress={acceptRide} />
