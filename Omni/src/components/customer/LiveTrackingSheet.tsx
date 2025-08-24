@@ -133,25 +133,27 @@ const LiveTrackingSheet: FC<{ item: RideItem }> = ({ item }) => {
                 </View>
             </View>
             <View style={rideStyles.bottomButtonContainer}>
-                <TouchableOpacity
-                    style={rideStyles.cancelButton}
-                    // onPress={() => { emit('CANCEL RIDE', item?._id) }}>
-                    onPress={() => { emit && emit('CANCEL RIDE', item?._id) }}>
-                    <CustomText style={rideStyles.cancelButtonText}>Cancel Ride</CustomText>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={rideStyles.backButton}
-                    onPress={() => {
-                        if (item?.status === 'COMPLETED') {
-                            resetAndNavigate("/customer/home")
-                            return;
-                        }
-                    }}>
-                    <CustomText style={rideStyles.backButtonText}>Back</CustomText>
-                </TouchableOpacity>
+                {item?.status === 'ARRIVING' ?
+                    (
+                        <TouchableOpacity
+                            style={rideStyles.cancelButton}
+                            onPress={() => { 
+                                emit && emit('CANCEL RIDE', item?._id)
+                                resetAndNavigate('/customer/home')
+                                 }}>
+                            <CustomText style={rideStyles.cancelButtonText}>Cancel Ride</CustomText>
+                       </TouchableOpacity>
+                    ) : (
+                        <TouchableOpacity
+                            style={rideStyles.cancelButton}
+                            onPress={() => { resetAndNavigate('/customer/home') }}>
+                            <CustomText style={rideStyles.cancelButtonText}>Home</CustomText>
+                        </TouchableOpacity>
+                    )
+                }
             </View>
 
-        </View>
+        </View >
 
     )
 }

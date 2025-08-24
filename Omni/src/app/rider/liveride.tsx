@@ -400,11 +400,14 @@ const LiveRide = () => {
                         setIsOtpModalVisible(true)
                         return
                     }
-
-                    // ARRIVED -> complete the ride
-                    const isSuccess = await updateRideStatus(rideData?.id || rideData?._id, 'COMPLETED')
+                    // ARRIVED -> complete the ride (explicit request with logging)
+                    const requestedStatus = 'COMPLETED'
+                    console.log('[LiveRide] requesting updateRideStatus ->', rideData?.id || rideData?._id, requestedStatus, 'from RiderActionButton onPress')
+                    const isSuccess = await updateRideStatus(rideData?.id || rideData?._id, requestedStatus)
+                    console.log('[LiveRide] updateRideStatus returned:', isSuccess, 'requestedStatus=', requestedStatus)
                     if (isSuccess) {
                         Alert.alert('Ride Completed', 'The ride has been successfully completed.')
+                        setRideData((prev: Record<string, any> | null) => prev ? { ...prev, status: requestedStatus } : prev)
                         resetAndNavigate('/rider/home')
                     } else {
                         Alert.alert('Error', 'Failed to complete the ride. Please try again.')
@@ -443,16 +446,15 @@ const LiveRide = () => {
                                 Alert.alert('Error', 'Invalid OTP. Please try again.')
                                 return
                             }
-
-                            console.log('[LiveRide] OTP matched, marking ride ARRIVED for', rideData?.id || rideData?._id)
-                            const isSuccess = await updateRideStatus(rideData?.id || rideData?._id, 'ARRIVED')
+                            console.log('[LiveRide] OTP matched -> requesting ARRIVED update for', rideData?.id || rideData?._id)
+                            const requestedStatus = 'ARRIVED'
+                            console.log('[LiveRide] requesting updateRideStatus ->', rideData?.id || rideData?._id, requestedStatus, 'from OTP onConfirm')
+                            const isSuccess = await updateRideStatus(rideData?.id || rideData?._id, requestedStatus)
+                            console.log('[LiveRide] updateRideStatus returned:', isSuccess, 'requestedStatus=', requestedStatus)
                             if (isSuccess) {
-                                // update local state so UI updates immediately
-                                setRideData((prev: Record<string, any> | null) => prev ? { ...prev, status: 'ARRIVED' } : prev)
+                                setRideData((prev: Record<string, any> | null) => prev ? { ...prev, status: requestedStatus } : prev)
                                 setIsOtpModalVisible(false)
-                                // notify server via socket (best-effort)
                                 try { emit && emit('ride:arrived', { rideId: rideData?.id || rideData?._id }) } catch (e) { console.warn('[LiveRide] emit ride:arrived failed', e) }
-                                Alert.alert('Success', 'You have marked arrival at pickup.')
                                 console.log('[LiveRide] ride status set to ARRIVED')
                             } else {
                                 Alert.alert('Error', 'Failed to mark ARRIVED. Please try again.')

@@ -105,6 +105,7 @@ const handleSocketConnection = (io) => {
           console.log('[sockets] customer:accept_offer updated ride', rideId, 'status ->', updated.status);
 
           // emit updated ride to any listeners subscribed to ride room
+          console.log('[sockets] emitting rideData to room ride:' + rideId, updated);
           io.to(`ride:${rideId}`).emit('rideData', { ride: updated });
           console.log('[sockets] emitted rideData to room ride:' + rideId);
 
@@ -181,6 +182,7 @@ const handleSocketConnection = (io) => {
           if (!updated) return socket.emit('error', { message: 'Ride not found' })
           console.log('[sockets] offer:accept updated ride', updated._id, 'status->', updated.status)
           // notify room and customer
+          console.log('[sockets] emitting rideData to room ride:' + rideId, updated);
           io.to(`ride:${rideId}`).emit('rideData', { ride: updated })
           console.log('[sockets] emitted rideData to room ride:' + rideId)
           if (payload.customerSocketId) {

@@ -201,8 +201,18 @@ export const acceptRide = async (req, res) => {
 
     ride = await ride.populate("rider");
 
-    req.socket.to(`ride_${rideId}`).emit("rideUpdate", ride);
-    req.socket.to(`ride_${rideId}`).emit("rideAccepted");
+    // req.socket.to(`ride_${rideId}`).emit("rideUpdate", ride);
+    // req.socket.to(`ride_${rideId}`).emit("rideAccepted");
+
+    // emit via socket.io instance stored on app
+    const io = req?.app?.get?.('io')
+    if (io) {
+      io.to(`ride:${rideId}`).emit('rideUpdate', ride)
+      io.to(`ride:${rideId}`).emit('rideAccepted')
+      console.log('[ride] emitted rideUpdate & rideAccepted to room ride:' + rideId)
+    } else {
+      console.warn('[ride] socket.io instance not available on req.app; skipping emit')
+    }
 
     res.status(StatusCodes.OK).json({
       message: "Ride accepted successfully",
@@ -228,6 +238,46 @@ export const getRideById = async (req, res, next) => {
     return next(err);
   }
 };
+// export const updateRideStatus = async (req, res) => {
+//   const { rideId } = req.params;
+//   const { status } = req.body;
+
+//   if (!rideId || !status) {
+//     throw new BadRequestError("Ride ID and status are required");
+//   }
+
+//   try {
+//     let ride = await Ride.findById(rideId).populate("customer rider");
+
+//     if (!ride) {
+//       throw new NotFoundError("Ride not found");
+//     }
+
+//     if (!["START", "ARRIVED", "COMPLETED"].includes(status)) {
+//       throw new BadRequestError("Invalid ride status");
+//     }
+
+//     ride.status = status;
+//     await ride.save();
+
+//     // req.socket.to(`ride_${rideId}`).emit("rideUpdate", ride);
+//     const io = req?.app?.get?.('io')
+//     if (io) {
+//       io.to(`ride:${rideId}`).emit('rideUpdate', ride)
+//       console.log('[ride] emitted rideUpdate to room ride:' + rideId, 'status=', status)
+//     } else {
+//       console.warn('[ride] socket.io instance not available on req.app; skipping emit')
+//     }
+
+//     res.status(StatusCodes.OK).json({
+//       message: `Ride status updated to ${status}`,
+//       ride,
+//     });
+//   } catch (error) {
+//     console.error("Error updating ride status:", error);
+//     throw new BadRequestError("Failed to update ride status");
+//   }
+// };
 export const updateRideStatus = async (req, res) => {
   const { rideId } = req.params;
   const { status } = req.body;
@@ -250,7 +300,16 @@ export const updateRideStatus = async (req, res) => {
     ride.status = status;
     await ride.save();
 
-    req.socket.to(`ride_${rideId}`).emit("rideUpdate", ride);
+    // req.socket.to(`ride_${rideId}`).emit("rideUpdate", ride);
+      // emit via socket.io instance stored on the express app (same pattern as acceptRide)
+    const io = req?.app?.get?.('io');
+    if (io && typeof io.to === 'function') {
+      // use the same room naming as acceptRide: `ride:<id>`
+      io.to(`ride:${rideId}`).emit('rideUpdate', ride);
+      console.log('[ride.updateRideStatus] emitted rideUpdate to room ride:' + rideId, 'status=', status);
+    } else {
+      console.warn('[ride.updateRideStatus] socket.io instance not available on req.app; skipping emit');
+    }
 
     res.status(StatusCodes.OK).json({
       message: `Ride status updated to ${status}`,
@@ -261,7 +320,6 @@ export const updateRideStatus = async (req, res) => {
     throw new BadRequestError("Failed to update ride status");
   }
 };
-
 export const getMyRides = async (req, res) => {
   const userId = req.user.id;
   const { status } = req.query;
