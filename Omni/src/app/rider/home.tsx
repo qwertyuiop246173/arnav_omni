@@ -1,5 +1,5 @@
-import { View, Text, Image, Alert, StyleSheet, TouchableOpacity } from 'react-native'
-import React, { useEffect, useState } from 'react'
+import { View, Text, Image, Alert, StyleSheet, TouchableOpacity, Platform, ToastAndroid } from 'react-native'
+import React, { useEffect, useRef, useState } from 'react'
 import { useIsFocused } from '@react-navigation/native'
 import { UseWS } from '@/service/WSProvider'
 import { useRiderStore } from '@/store/riderStore'
@@ -14,6 +14,7 @@ import CustomText from '@/components/shared/customText'
 import RiderRidesItem from '@/components/Rider/RiderRidesItem'
 import { useUserStore } from '@/store/userStore'
 import { calculateDistance } from '@/utils/mapUtils'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const RiderHome = () => {
 
@@ -25,14 +26,76 @@ const RiderHome = () => {
   const [rideOffers, setRideOffers] = useState<any[]>([])
   // vehicle choices must match those used by customers: 'bike','auto','cabEconomy','cabPremium' etc.
   const VEHICLES = ['bike', 'auto', 'cabEconomy', 'cabPremium'];
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const selectedVehicle = VEHICLES[selectedIdx];
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const selectedVehicle = selectedIdx !== null ? VEHICLES[selectedIdx] : '';
+  const [lastLoaded, setLastLoaded] = useState(false);
+  const prevOnDutyRef = useRef<boolean>(false)
+  const LAST_VEHICLE_KEY = 'rider:lastSelectedVehicle'
+  // restore last selected vehicle when Home mounts
+  useEffect(() => {
+    const loadLast = async () => {
+      try {
+        const v = await AsyncStorage.getItem(LAST_VEHICLE_KEY)
+        if (v !== null) {
+          const idx = Number(v)
+          if (!Number.isNaN(idx) && idx >= 0 && idx < VEHICLES.length) {
+            setSelectedIdx(idx)
+            console.log('[RiderHome] restored last selected vehicle idx=', idx, 'vehicle=', VEHICLES[idx])
+          }
+        }
+      } catch (e) {
+        console.warn('[RiderHome] failed to load last vehicle', e)
+      } finally {
+        // mark load complete so toast logic can rely on restored selection
+        setLastLoaded(true)
+      }
+    }
+    loadLast()
+  }, [])
 
+  // helper to select vehicle and persist choice
+  const selectVehicle = async (idx: number) => {
+    setSelectedIdx(idx)
+    try {
+      await AsyncStorage.setItem(LAST_VEHICLE_KEY, String(idx))
+      console.log('[RiderHome] saved last selected vehicle idx=', idx)
+    } catch (e) {
+      console.warn('[RiderHome] failed to save last vehicle', e)
+    }
+  }
+    // once persisted choice is loaded, initialize prevOnDutyRef to current onDuty
+  // this prevents the "go ON-DUTY" toast firing immediately when Home mounts
+  useEffect(() => {
+    if (!lastLoaded) return
+    prevOnDutyRef.current = onDuty
+    console.log('[RiderHome] prevOnDutyRef initialized ->', prevOnDutyRef.current)
+  }, [lastLoaded, onDuty])
+  useEffect(() => {
+    // wait until persisted vehicle is loaded to decide showing the toast
+    if (!lastLoaded) return
+
+    // only show toast when transitioning ON-DUTY, screen focused, AND no vehicle already selected
+    if (onDuty && !prevOnDutyRef.current && isFocused && !selectedVehicle) {
+      const msg = 'Select the vehicle you are riding. Only then you will start receiving ride offers'
+      if (Platform.OS === 'android') {
+        ToastAndroid.show(msg, ToastAndroid.LONG)
+      } else {
+        Alert.alert('On Duty', msg)
+      }
+    }
+    prevOnDutyRef.current = onDuty
+  }, [onDuty, isFocused, lastLoaded, selectedVehicle])
   // emit selection when changed
   useEffect(() => {
     try {
-      console.log('[RiderHome] emitting rider:setVehicle', selectedVehicle);
-      emit && emit('rider:setVehicle', selectedVehicle);
+      // console.log('[RiderHome] emitting rider:setVehicle', selectedVehicle);
+      // emit && emit('rider:setVehicle', selectedVehicle);
+      if (selectedVehicle) {
+        console.log('[RiderHome] emitting rider:setVehicle', selectedVehicle);
+        emit && emit('rider:setVehicle', selectedVehicle);
+      } else {
+        console.log('[RiderHome] no vehicle selected yet - not emitting rider:setVehicle');
+      }
     } catch (e) {
       console.warn('[RiderHome] emit rider:setVehicle failed', e);
     }
@@ -84,7 +147,6 @@ const RiderHome = () => {
           }
         }
 
-        // append if not already present
         setRideOffers(prev => {
           const exists = prev.some(p => p._id === item._id)
           if (exists) {
@@ -195,28 +257,46 @@ const RiderHome = () => {
       <RiderRidesItem removeIt={() => removeRide(item?._id)} item={item} />
     );
   }
-
+  // reorder offers so those matching selectedVehicle are shown first
+  const displayOffers = (() => {
+    if (!onDuty) return []
+    if (!selectedVehicle) return [] // hide offers until vehicle selected
+    const matched = rideOffers.filter(p => (p.vehicle || '').toString() === selectedVehicle)
+    const others = rideOffers.filter(p => (p.vehicle || '').toString() !== selectedVehicle)
+    return [...matched, ...others]
+  })()
   return (
     <View style={homeStyles.container}>
       <StatusBar style="light" backgroundColor='orange' translucent={false} />
       <RiderHeader />
-      <View style={styles.pillContainer}>
-        <TouchableOpacity
-          style={styles.pill}
-          onPress={() => {
-            const next = (selectedIdx + 1) % VEHICLES.length;
-            setSelectedIdx(next);
-            console.log('[RiderHome] vehicle pill pressed new selection=', VEHICLES[next]);
-          }}
-        >
-          <Text style={styles.pillText}>{selectedVehicle.toUpperCase()}</Text>
-        </TouchableOpacity>
+      <View>
+        {onDuty ? (
+          <View style={styles.vehicleContainer}>
+            {VEHICLES.map((v, i) => {
+              const active = i === selectedIdx
+              const labelMap: Record<string, string> = { bike: 'Bike', auto: 'Auto', cabEconomy: 'Cab-E', cabPremium: 'Cab-P' }
+              return (
+                <TouchableOpacity
+                  key={v}
+                  style={[styles.vehicleBtn, active ? styles.vehicleBtnActive : null]}
+                  onPress={() => {
+                    selectVehicle(i)
+                    console.log('[RiderHome] vehicle selected=', v)
+                  }}
+                >
+                  <Text style={[styles.vehicleText, active ? styles.vehicleTextActive : null]}>{labelMap[v] || v}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        ) : null}
       </View>
+
       <FlatList
-        data={!onDuty ? [] : rideOffers}
+        data={displayOffers}
         renderItem={renderRides}
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: 120, padding: 10 }}
+        contentContainerStyle={{ paddingTop: 88, paddingBottom: 120, paddingHorizontal: 10 }}
         keyExtractor={(item: any) => item?.id || Math.random().toString()}
         ListEmptyComponent={
           <View style={riderStyles?.emptyContainer}>
@@ -257,7 +337,40 @@ const styles = StyleSheet.create({
     color: '#000',
     fontWeight: '600',
     fontSize: 12
+  },
+  vehicleContainer: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,           // span full width with left/right padding
+    zIndex: 999,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between' // distribute space across row
+  },
+  vehicleBtn: {
+    flex: 1,                    // each button takes equal width
+    marginHorizontal: 6,        // small gap between buttons
+    paddingVertical: 8,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 4
+  },
+  vehicleBtnActive: {
+    backgroundColor: '#3C75BE'
+  },
+  vehicleText: {
+    color: '#000',
+    fontWeight: '600',
+    fontSize: 12
+  },
+  vehicleTextActive: {
+    color: '#fff'
   }
 });
-
 export default RiderHome
