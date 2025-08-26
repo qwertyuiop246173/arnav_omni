@@ -1,4 +1,4 @@
-import { View, Text, Modal, TouchableOpacity, TextInput, FlatList, Image } from 'react-native'
+import { View, Text, Modal, TouchableOpacity, TextInput, FlatList, Image, ActivityIndicator } from 'react-native'
 import React, { FC, memo, useEffect, useRef, useState } from 'react'
 import { modalStyles } from '@/styles/modalStyles'
 import { useUserStore } from '@/store/userStore'
@@ -31,6 +31,7 @@ const MapPickerModal: FC<MapPickerModalProps> = ({ visible, selectedLocation, on
     const [region, setRegion] = useState<Region | null>(null)
     const [locations, setLocations] = useState<any[]>([])
     const TextInputRef = useRef<TextInput>(null)
+    const [loadingLocation, setLoadingLocation] = useState(false)
     const fetchLocation = async (query: string) => {
         if (query?.length > 4) {
             // Fetch location suggestions based on the query
@@ -93,6 +94,7 @@ const MapPickerModal: FC<MapPickerModalProps> = ({ visible, selectedLocation, on
     }
 
     const handleGpsButtonPress = async () => {
+        setLoadingLocation(true)
         try {
             const location = await Location.getCurrentPositionAsync({})
             const { latitude, longitude } = location.coords;
@@ -105,11 +107,13 @@ const MapPickerModal: FC<MapPickerModalProps> = ({ visible, selectedLocation, on
             setRegion({
                 latitude,
                 longitude,
-                latitudeDelta: 0.5,
-                longitudeDelta: 0.5,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
             })
         } catch (error) {
             console.error("Error fetching GPS location: ", error)
+        } finally {
+            setLoadingLocation(false)
         }
     }
 
@@ -160,8 +164,10 @@ const MapPickerModal: FC<MapPickerModalProps> = ({ visible, selectedLocation, on
                         <View style={{ flex: 1, width: '100%' }}>
                             <MapView
                                 ref={mapRef}
-                                maxZoomLevel={16}
+                                maxZoomLevel={20}
                                 minZoomLevel={12}
+                                zoomEnabled={true}
+                                zoomControlEnabled={true}
                                 pitchEnabled={false}
                                 onRegionChangeComplete={handleRegionChangeComplete}
                                 style={{ flex: 1 }}
@@ -195,7 +201,7 @@ const MapPickerModal: FC<MapPickerModalProps> = ({ visible, selectedLocation, on
                                 <MaterialCommunityIcons name='crosshairs-gps' size={RFValue(16)} color='#3C75BE' />
                             </TouchableOpacity>
                         </View>
-                        <View style={modalStyles.footerContainer}>
+                        {/* <View style={modalStyles.footerContainer}>
                             <Text style={modalStyles.addressText} numberOfLines={2}>{address === " " ? "Getting address..." : address}</Text>
                             <View style={modalStyles.buttonContainer}>
                                 <TouchableOpacity style={modalStyles.button}
@@ -210,6 +216,30 @@ const MapPickerModal: FC<MapPickerModalProps> = ({ visible, selectedLocation, on
                                     }}>
                                     <Text style={modalStyles.buttonText}>Set  Address</Text>
                                 </TouchableOpacity></View>
+                        </View> */}
+                        <View style={modalStyles.footerContainer}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                {loadingLocation ? <ActivityIndicator size='small' color='#000' /> : null}
+                                <Text style={[modalStyles.addressText, { marginLeft: loadingLocation ? 8 : 0 }]} numberOfLines={2}>
+                                    {!loadingLocation && !address?.trim() ? 'Getting address...' : (address ?? '')}
+                                </Text>
+                            </View>
+                            <View style={modalStyles.buttonContainer}>
+                                <TouchableOpacity
+                                    style={[modalStyles.button, (loadingLocation || !region || !address?.trim()) ? { opacity: 0.5 } : null]}
+                                    disabled={loadingLocation || !region || !address?.trim()}
+                                    onPress={() => {
+                                        if (loadingLocation || !region || !address?.trim()) return
+                                        onSelectLocation({
+                                            type: title,
+                                            latitude: region?.latitude,
+                                            longitude: region?.longitude,
+                                        })
+                                        onClose()
+                                    }}>
+                                    <Text style={modalStyles.buttonText}>Set Address</Text>
+                                </TouchableOpacity>
+                            </View>
                         </View>
                     </>
                 )}
