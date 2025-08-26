@@ -63,28 +63,43 @@ const RiderHome = () => {
       console.warn('[RiderHome] failed to save last vehicle', e)
     }
   }
-    // once persisted choice is loaded, initialize prevOnDutyRef to current onDuty
+  // once persisted choice is loaded, initialize prevOnDutyRef to current onDuty
   // this prevents the "go ON-DUTY" toast firing immediately when Home mounts
-  useEffect(() => {
-    if (!lastLoaded) return
-    prevOnDutyRef.current = onDuty
-    console.log('[RiderHome] prevOnDutyRef initialized ->', prevOnDutyRef.current)
-  }, [lastLoaded, onDuty])
-  useEffect(() => {
-    // wait until persisted vehicle is loaded to decide showing the toast
-    if (!lastLoaded) return
+  // useEffect(() => {
+  //   if (!lastLoaded) return
+  //   prevOnDutyRef.current = onDuty
+  //   console.log('[RiderHome] prevOnDutyRef initialized ->', prevOnDutyRef.current)
+  // }, [lastLoaded, onDuty])
+  // useEffect(() => {
+  //   // wait until persisted vehicle is loaded to decide showing the toast
+  //   if (!lastLoaded) return
 
-    // only show toast when transitioning ON-DUTY, screen focused, AND no vehicle already selected
-    if (onDuty && !prevOnDutyRef.current && isFocused && !selectedVehicle) {
+  //   // only show toast when transitioning ON-DUTY, screen focused, AND no vehicle already selected
+  //   if (onDuty && !prevOnDutyRef.current && isFocused && !selectedVehicle) {
+  //     const msg = 'Select the vehicle you are riding. Only then you will start receiving ride offers'
+  //     if (Platform.OS === 'android') {
+  //       ToastAndroid.show(msg, ToastAndroid.LONG)
+  //     } else {
+  //       Alert.alert('On Duty', msg)
+  //     }
+  //   }
+  //   prevOnDutyRef.current = onDuty
+  // }, [onDuty, isFocused, lastLoaded, selectedVehicle])
+
+  // show toast whenever rider is ON-DUTY, screen focused and no vehicle selected
+  // wait until persisted selection (lastLoaded) is restored to avoid false alerts on mount
+  useEffect(() => {
+    if (!lastLoaded) return
+    if (onDuty && isFocused && !selectedVehicle) {
       const msg = 'Select the vehicle you are riding. Only then you will start receiving ride offers'
       if (Platform.OS === 'android') {
         ToastAndroid.show(msg, ToastAndroid.LONG)
       } else {
-        Alert.alert('On Duty', msg)
+        Alert.alert('Select vehicle', msg)
       }
     }
-    prevOnDutyRef.current = onDuty
   }, [onDuty, isFocused, lastLoaded, selectedVehicle])
+
   // emit selection when changed
   useEffect(() => {
     try {
