@@ -92,9 +92,7 @@ import {
 //     });
 //   }
 // };
-const generateOtp = () => {
-  return Math.floor(1000 + Math.random() * 9000).toString()
-}
+
 export const createRide = async (req, res) => {
   try {
     console.log('[ride.create] incoming body:', req.body)

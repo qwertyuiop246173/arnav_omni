@@ -4,7 +4,7 @@ import { useUserStore } from '@/store/userStore';
 import { useRoute } from '@react-navigation/native';
 import { rideStyles } from '@/styles/rideStyles';
 import { StatusBar } from 'expo-status-bar';
-import { calculateDistance, calculateFare } from '@/utils/mapUtils';
+import { calculateDistance, calculateFare, reverseGeocode } from '@/utils/mapUtils';
 import RoutesMap from '@/components/customer/RoutesMap';
 import CustomText from '@/components/shared/customText';
 import { riderStyles } from '@/styles/riderStyles';
@@ -86,15 +86,34 @@ const RideBooking = () => {
     //   },
 
     // })
+    // normalize drop coords and ensure we have a drop address (reverse-geocode as fallback)
+    const dropLat = parseFloat(item?.drop_latitude)
+    const dropLng = parseFloat(item?.drop_longitude)
+    let dropAddr = item?.drop_address ?? item?.address ?? ''
+    if (!dropAddr?.trim() && Number.isFinite(dropLat) && Number.isFinite(dropLng)) {
+      try {
+        dropAddr = await reverseGeocode(dropLat, dropLng)
+        console.log('[RideBooking] reverseGeocode dropAddr ->', dropAddr)
+      } catch (rgErr) {
+        console.warn('[RideBooking] reverseGeocode failed', rgErr)
+      }
+    }
 
+    if (!Number.isFinite(dropLat) || !Number.isFinite(dropLng) || !dropAddr?.trim()) {
+      console.warn('[RideBooking] invalid drop data', { dropLat, dropLng, dropAddr, item })
+      Alert.alert('Missing drop', 'Please select a valid drop location with address.')
+      setLoading(false)
+      return
+    }
     // Calculate distance
+
     try {
       const distance = Number(
         calculateDistance(
           parseFloat(location.latitude),
           parseFloat(location.longitude),
-          parseFloat(item.drop_latitude),
-          parseFloat(item.drop_longitude)
+          dropLat,
+          dropLng
         )
       );
       console.log('[RideBooking] calculated distance:', distance);
@@ -120,9 +139,9 @@ const RideBooking = () => {
       const payload = {
         vehicle: selectedVehicle,
         drop: {
-          latitude: parseFloat(item.drop_latitude),
-          longitude: parseFloat(item.drop_longitude),
-          address: item?.drop_address,
+          latitude: dropLat,
+          longitude: dropLng,
+          address: dropAddr,
         },
         pickup: {
           latitude: parseFloat(location.latitude),
