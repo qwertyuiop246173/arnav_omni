@@ -34,10 +34,11 @@ const DraggableMap: FC<{ height: number }> = ({ height }) => {
                         const newRegion = {
                             latitude,
                             longitude,
-                            latitudeDelta: 0.05,
-                            longitudeDelta: 0.05
+                            latitudeDelta: 0.01,
+                            longitudeDelta: 0.01
                         }
                         handleRegionChangeComplete(newRegion)
+                        mapRef.current?.animateToRegion(newRegion, 500)
                     } catch (error) {
                         console.error("Error getting current Location:", error)
                     }
@@ -69,7 +70,7 @@ const DraggableMap: FC<{ height: number }> = ({ height }) => {
                 setMarker(updateMarkers)
             })
         }
-        return ()=>{
+        return () => {
             off('nearbyriders')
         }
     }, [location, emit, on, off, isFocused])
@@ -95,8 +96,8 @@ const DraggableMap: FC<{ height: number }> = ({ height }) => {
     // }
 
     // useEffect(() 
-    
-    
+
+
 
     const handleRegionChangeComplete = async (newRegion: Region) => {
         const address = await reverseGeocode(newRegion.latitude,
@@ -130,6 +131,8 @@ const DraggableMap: FC<{ height: number }> = ({ height }) => {
                 edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
                 animated: true
             })
+            const closerRegion = { latitude, longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 }
+            mapRef.current?.animateToRegion(closerRegion, 500)
             const address = await reverseGeocode(latitude, longitude)
             setLocation({ latitude, longitude, address })
 
@@ -143,8 +146,10 @@ const DraggableMap: FC<{ height: number }> = ({ height }) => {
         <View style={{ height: height, width: '100%' }}>
             <MapView
                 ref={mapRef}
-                maxZoomLevel={16}
+                maxZoomLevel={20}
                 minZoomLevel={12}
+                zoomEnabled={true}
+                zoomControlEnabled={true}
                 pitchEnabled={false}
                 onRegionChangeComplete={handleRegionChangeComplete}
                 style={{ flex: 1 }}
