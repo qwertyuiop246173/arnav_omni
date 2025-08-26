@@ -2,7 +2,7 @@
   "expo": {
     "name": "Omni",
     "slug": "rideapp",
-    "owner": "boatqueen",
+    "owner": "milton6",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./src/assets/images/icon.png",
@@ -57,7 +57,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "7a7c67bf-35be-4f3b-a6f3-88e419c03127"
+        "projectId": "03eba696-ed4f-4c8e-8eae-4571b2dc806d"
       }
     }
   }

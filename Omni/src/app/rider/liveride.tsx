@@ -377,44 +377,42 @@ const LiveRide = () => {
                 }}
                 color='#228B22'
             /> */}
-            <RiderActionButton
-                ride={rideData}
-                // treat both ARRIVING and START as en-route -> show ARRIVING until rider marks ARRIVED
-                title={
-                    (rideData?.status === 'ARRIVING' || rideData?.status === 'START')
-                        ? (canArrive ? 'ARRIVED' : 'ARRIVING')
-                        : rideData?.status === 'ARRIVED'
-                            ? 'COMPLETED'
-                            : 'SUCCESS'
-                }
-                onPress={async () => {
-                    if (!rideData) return
-
-                    // en-route states: ARRIVING/START -> require proximity then OTP to mark ARRIVED
-                    if (rideData.status === 'ARRIVING' || rideData.status === 'START') {
-                        if (!canArrive) {
-                            const meters = pickupDistance ? Math.round(pickupDistance) : null
-                            Alert.alert('Not at pickup', meters ? `You are ${meters}m away. Move closer to mark ARRIVED.` : 'You are not at pickup yet.')
+            {rideData ? (
+                <RiderActionButton
+                    ride={rideData}
+                    title={
+                        (rideData?.status === 'ARRIVING' || rideData?.status === 'START')
+                            ? (canArrive ? 'ARRIVED' : 'ARRIVING')
+                            : rideData?.status === 'ARRIVED'
+                                ? 'COMPLETED'
+                                : 'SUCCESS'
+                    }
+                    onPress={async () => {
+                        if (!rideData) return
+                        if (rideData.status === 'ARRIVING' || rideData.status === 'START') {
+                            if (!canArrive) {
+                                const meters = pickupDistance ? Math.round(pickupDistance) : null
+                                Alert.alert('Not at pickup', meters ? `You are ${meters}m away. Move closer to mark ARRIVED.` : 'You are not at pickup yet.')
+                                return
+                            }
+                            setIsOtpModalVisible(true)
                             return
                         }
-                        setIsOtpModalVisible(true)
-                        return
-                    }
-                    // ARRIVED -> complete the ride (explicit request with logging)
-                    const requestedStatus = 'COMPLETED'
-                    console.log('[LiveRide] requesting updateRideStatus ->', rideData?.id || rideData?._id, requestedStatus, 'from RiderActionButton onPress')
-                    const isSuccess = await updateRideStatus(rideData?.id || rideData?._id, requestedStatus)
-                    console.log('[LiveRide] updateRideStatus returned:', isSuccess, 'requestedStatus=', requestedStatus)
-                    if (isSuccess) {
-                        Alert.alert('Ride Completed', 'The ride has been successfully completed.')
-                        setRideData((prev: Record<string, any> | null) => prev ? { ...prev, status: requestedStatus } : prev)
-                        resetAndNavigate('/rider/home')
-                    } else {
-                        Alert.alert('Error', 'Failed to complete the ride. Please try again.')
-                    }
-                }}
-                color="#228B22"
-            />
+                        const requestedStatus = 'COMPLETED'
+                        console.log('[LiveRide] requesting updateRideStatus ->', rideData?.id || rideData?._id, requestedStatus, 'from RiderActionButton onPress')
+                        const isSuccess = await updateRideStatus(rideData?.id || rideData?._id, requestedStatus)
+                        console.log('[LiveRide] updateRideStatus returned:', isSuccess, 'requestedStatus=', requestedStatus)
+                        if (isSuccess) {
+                            Alert.alert('Ride Completed', 'The ride has been successfully completed.')
+                            setRideData((prev: Record<string, any> | null) => prev ? { ...prev, status: requestedStatus } : prev)
+                            resetAndNavigate('/rider/home')
+                        } else {
+                            Alert.alert('Error', 'Failed to complete the ride. Please try again.')
+                        }
+                    }}
+                    color="#228B22"
+                />
+            ) : null}
 
             {isOtpModalVisible && (
                 <OtpInputModal
