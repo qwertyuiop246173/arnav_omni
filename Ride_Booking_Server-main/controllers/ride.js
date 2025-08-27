@@ -190,7 +190,17 @@ export const acceptRide = async (req, res) => {
     if (!ride) {
       throw new NotFoundError("Ride not found");
     }
+    const status = String(ride.status ?? '').toUpperCase();
+    // Reject if cancelled/completed/no-rider — include explicit cancelled-by flags
+    if (['CANCELLED', 'RIDE_CANCELLED_BY_CUSTOMER', 'RIDE_CANCELLED_BY_RIDER', 'COMPLETED', 'NO_RIDER_ALLOTTED'].includes(status)) {
+      return res.status(400).json({ message: 'Ride is no longer available' });
+    }
 
+    // Ensure this rider was actually offered the ride
+    const offered = Array.isArray(ride.offeredTo) ? ride.offeredTo.map(String) : [];
+    if (!offered.includes(String(riderId))) {
+      return res.status(400).json({ message: 'Offer cancelled or not valid for this rider' });
+    }
     if (ride.status !== "SEARCHING_FOR_RIDER") {
       throw new BadRequestError("Ride is no longer available for assignment");
     }
@@ -365,13 +375,21 @@ export const cancelRide = async (req, res) => {
 
     // idempotent: if already cancelled/finished, return current state
     const currentStatus = String(ride.status ?? '').toUpperCase()
-    if (currentStatus === 'CANCELLED' || currentStatus === 'COMPLETED') {
+    if (['CANCELLED', 'RIDE_CANCELLED_BY_CUSTOMER', 'RIDE_CANCELLED_BY_RIDER', 'COMPLETED'].includes(currentStatus)) {
       const populated = await Ride.findById(rideId).populate('customer rider').lean().exec()
       return res.status(200).json({ message: 'Ride already finished', ride: populated })
     }
 
-    // update status
-    ride.status = 'CANCELLED'
+    // If a rider has already been assigned or ride has progressed to START/ARRIVED,
+    // persist explicit RIDE_CANCELLED_BY_CUSTOMER. Otherwise keep legacy CANCELLED.
+    const progressedStatuses = ['START', 'ARRIVED']
+    const hasRider = Boolean(ride.rider)
+    const progressed = progressedStatuses.includes(String(ride.status ?? '').toUpperCase())
+    if (hasRider || progressed) {
+      ride.status = 'RIDE_CANCELLED_BY_CUSTOMER'
+    } else {
+      ride.status = 'CANCELLED'
+    }
     ride.cancelledBy = 'customer'
     await ride.save()
 

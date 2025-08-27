@@ -1,4 +1,4 @@
-import { View, Text, Image, TouchableOpacity, Modal, StyleSheet, Alert } from 'react-native'
+import { View, Text, Image, TouchableOpacity, Modal, StyleSheet, Alert, Platform, ToastAndroid } from 'react-native'
 import React, { FC, useEffect, useState } from 'react'
 import { UseWS } from '@/service/WSProvider'
 import { rideStyles } from '@/styles/rideStyles'
@@ -8,6 +8,9 @@ import CustomText from '../shared/customText'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
 import { resetAndNavigate } from '@/utils/Helpers'
 import OtpInputModal from '@/components/Rider/OtpInputModal'
+import { cancelRide as apiCancelRide } from '@/service/rideService'
+
+
 type VehicleType = 'bike' | 'auto' | 'cabEconomy' | 'cabPremium'
 
 interface RideItem {
@@ -26,6 +29,39 @@ const LiveTrackingSheet: FC<{ item: RideItem }> = ({ item }) => {
     const [showOtpModal, setShowOtpModal] = useState(false)
     const [showHappyModal, setShowHappyModal] = useState(false)
     const [showCompletedModal, setShowCompletedModal] = useState(false)
+
+    const [cancelling, setCancelling] = useState(false)
+
+    const handleCancelPress = async () => {
+        const rideId = item?._id
+        if (!rideId) {
+            Alert.alert('Cannot cancel', 'No ride id available')
+            return
+        }
+        try {
+            setCancelling(true)
+            console.log('[LiveTrackingSheet] cancelling ride', rideId)
+            const resp = await apiCancelRide(String(rideId))
+            console.log('[LiveTrackingSheet] cancel response', resp?.data ?? resp)
+
+            // best-effort socket notify / unsubscribe
+            try { emit && emit('unsubscribeRide', { rideId: String(rideId) }) } catch (e) { console.warn('[LiveTrackingSheet] emit unsubscribeRide failed', e) }
+            try { emit && emit('ride:cancelled', { rideId: String(rideId), by: 'customer' }) } catch (e) { console.warn('[LiveTrackingSheet] emit ride:cancelled failed', e) }
+
+            try {
+                if (Platform.OS === 'android') ToastAndroid.show('Ride offer cancelled', ToastAndroid.SHORT)
+                else Alert.alert('Ride offer cancelled')
+            } catch (e) { console.warn('[LiveTrackingSheet] toast failed', e) }
+
+            // navigate home and clear active ride UI
+            resetAndNavigate('/customer/home')
+        } catch (err: any) {
+            console.warn('[LiveTrackingSheet] cancel error', err)
+            Alert.alert('Cancel failed', err?.response?.data?.message ?? err?.message ?? 'Failed to cancel ride')
+        } finally {
+            setCancelling(false)
+        }
+    }
 
     // react to status changes and show proper overlays/modals
     useEffect(() => {
@@ -137,12 +173,9 @@ const LiveTrackingSheet: FC<{ item: RideItem }> = ({ item }) => {
                     (
                         <TouchableOpacity
                             style={rideStyles.cancelButton}
-                            onPress={() => { 
-                                emit && emit('CANCEL RIDE', item?._id)
-                                resetAndNavigate('/customer/home')
-                                 }}>
+                            onPress={handleCancelPress}>
                             <CustomText style={rideStyles.cancelButtonText}>Cancel Ride</CustomText>
-                       </TouchableOpacity>
+                        </TouchableOpacity>
                     ) : (
                         <TouchableOpacity
                             style={rideStyles.cancelButton}
