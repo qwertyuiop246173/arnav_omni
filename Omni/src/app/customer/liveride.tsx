@@ -1,4 +1,4 @@
-import { View, Platform, ActivityIndicator, Alert, Text, TouchableOpacity } from 'react-native'
+import { View, Platform, ActivityIndicator, Alert, Text, TouchableOpacity, ToastAndroid } from 'react-native'
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { screenHeight } from '@/utils/Constants'
 import { UseWS } from '@/service/WSProvider'
@@ -299,6 +299,38 @@ const LiveRide = () => {
         }, 50)
         return () => clearTimeout(t)
     }, [rideData])
+    // handle ride cancelled explicitly: cleanup sockets and navigate home
+    useEffect(() => {
+        if (!rideData) return
+        try {
+            if (String(rideData.status ?? '').toUpperCase() === 'CANCELLED') {
+                console.log('[LiveRide] ride cancelled -> cleaning up and navigating home', rideData._id)
+                // show brief message
+                if (Platform.OS === 'android') ToastAndroid.show('Ride cancelled', ToastAndroid.SHORT)
+                else Alert.alert('Ride cancelled')
+
+                // remove relevant global socket listeners (best-effort)
+                try {
+                    off && off('rideData')
+                    off && off('rideUpdate')
+                    off && off('rideCancelled')
+                    off && off('error')
+                    off && off('riderLocationUpdate')
+                    off && off('ride:offer')
+                    off && off('ride:accepted')
+                    off && off('ride:offer:legacy')
+                    console.log('[LiveRide] removed global socket listeners before navigation')
+                } catch (e) {
+                    console.warn('[LiveRide] off cleanup error', e)
+                }
+
+                // navigate back (replace so back-stack is clean)
+                resetAndNavigate('/customer/home')
+            }
+        } catch (e) {
+            console.warn('[LiveRide] cancelled handler error', e)
+        }
+    }, [rideData, off])
 
     // parse coordinates safely with fallback
     const parseCoord = (v: any) => {

@@ -223,7 +223,6 @@ export const acceptRide = async (req, res) => {
     } else {
       console.warn('[ride] socket.io instance not available on req.app; skipping emit')
     }
-
     res.status(StatusCodes.OK).json({
       message: "Ride accepted successfully",
       ride,
@@ -375,21 +374,13 @@ export const cancelRide = async (req, res) => {
 
     // idempotent: if already cancelled/finished, return current state
     const currentStatus = String(ride.status ?? '').toUpperCase()
-    if (['CANCELLED', 'RIDE_CANCELLED_BY_CUSTOMER', 'RIDE_CANCELLED_BY_RIDER', 'COMPLETED'].includes(currentStatus)) {
+    if (currentStatus === 'CANCELLED' || currentStatus === 'COMPLETED') {
       const populated = await Ride.findById(rideId).populate('customer rider').lean().exec()
       return res.status(200).json({ message: 'Ride already finished', ride: populated })
     }
 
-    // If a rider has already been assigned or ride has progressed to START/ARRIVED,
-    // persist explicit RIDE_CANCELLED_BY_CUSTOMER. Otherwise keep legacy CANCELLED.
-    const progressedStatuses = ['START', 'ARRIVED']
-    const hasRider = Boolean(ride.rider)
-    const progressed = progressedStatuses.includes(String(ride.status ?? '').toUpperCase())
-    if (hasRider || progressed) {
-      ride.status = 'RIDE_CANCELLED_BY_CUSTOMER'
-    } else {
-      ride.status = 'CANCELLED'
-    }
+    // update status
+    ride.status = 'CANCELLED'
     ride.cancelledBy = 'customer'
     await ride.save()
 

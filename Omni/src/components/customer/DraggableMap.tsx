@@ -146,10 +146,8 @@ const DraggableMap: FC<{ height: number }> = ({ height }) => {
         <View style={{ height: height, width: '100%' }}>
             <MapView
                 ref={mapRef}
-                maxZoomLevel={20}
+                maxZoomLevel={18}
                 minZoomLevel={12}
-                zoomEnabled={true}
-                zoomControlEnabled={true}
                 pitchEnabled={false}
                 onRegionChangeComplete={handleRegionChangeComplete}
                 style={{ flex: 1 }}
