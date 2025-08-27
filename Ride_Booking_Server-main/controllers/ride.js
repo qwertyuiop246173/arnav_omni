@@ -301,7 +301,7 @@ export const updateRideStatus = async (req, res) => {
     await ride.save();
 
     // req.socket.to(`ride_${rideId}`).emit("rideUpdate", ride);
-      // emit via socket.io instance stored on the express app (same pattern as acceptRide)
+    // emit via socket.io instance stored on the express app (same pattern as acceptRide)
     const io = req?.app?.get?.('io');
     if (io && typeof io.to === 'function') {
       // use the same room naming as acceptRide: `ride:<id>`
@@ -348,3 +348,66 @@ export const getMyRides = async (req, res) => {
     throw new BadRequestError("Failed to retrieve rides");
   }
 };
+
+export const cancelRide = async (req, res) => {
+  try {
+    const rideId = req.params?.rideId ?? req.body?.rideId
+    if (!rideId) return res.status(400).json({ message: 'rideId required' })
+
+    const riderUserId = req.user?.id ?? req.user?.userId ?? req.user?._id
+    const ride = await Ride.findById(rideId)
+    if (!ride) return res.status(404).json({ message: 'Ride not found' })
+
+    // only customer who created ride (or admin) can cancel via this endpoint
+    if (String(ride.customer) !== String(riderUserId)) {
+      return res.status(403).json({ message: 'Not authorized to cancel this ride' })
+    }
+
+    // idempotent: if already cancelled/finished, return current state
+    const currentStatus = String(ride.status ?? '').toUpperCase()
+    if (currentStatus === 'CANCELLED' || currentStatus === 'COMPLETED') {
+      const populated = await Ride.findById(rideId).populate('customer rider').lean().exec()
+      return res.status(200).json({ message: 'Ride already finished', ride: populated })
+    }
+
+    // update status
+    ride.status = 'CANCELLED'
+    ride.cancelledBy = 'customer'
+    await ride.save()
+
+    // clear any active offer timers for this ride
+    try {
+      if (typeof clearTimersForRide === 'function') {
+        clearTimersForRide(String(rideId))
+      } else {
+        console.warn('[ride.cancel] clearTimersForRide not available')
+      }
+    } catch (e) {
+      console.warn('[ride.cancel] clearTimers failed', e)
+    }
+
+    // emit update to interested sockets (ride room, customer, rider)
+    const io = req?.app?.get?.('io')
+    const updatedRide = await Ride.findById(rideId).populate('customer rider').lean().exec()
+    if (io) {
+      io.to(`ride:${rideId}`).emit('rideUpdate', updatedRide)
+      io.to(`ride:${rideId}`).emit('ride:cancelled', { rideId: String(rideId), by: 'customer' })
+      if (updatedRide?.customer) {
+        io.to(String(updatedRide.customer)).emit('ride:cancelled', { rideId: String(rideId), by: 'customer' })
+        io.to(`customer:${String(updatedRide.customer)}`).emit('ride:cancelled', { rideId: String(rideId), by: 'customer' })
+      }
+      if (updatedRide?.rider) {
+        io.to(String(updatedRide.rider)).emit('ride:cancelled', { rideId: String(rideId), by: 'customer' })
+        io.to(`rider:${String(updatedRide.rider)}`).emit('ride:cancelled', { rideId: String(rideId), by: 'customer' })
+      }
+      console.log('[ride.cancel] emitted ride:cancelled & rideUpdate for', rideId)
+    } else {
+      console.log('[ride.cancel] io not available to emit ride cancellations')
+    }
+
+    return res.status(200).json({ message: 'Ride cancelled', ride: updatedRide })
+  } catch (err) {
+    console.error('[ride.cancel] error', err)
+    return res.status(500).json({ message: 'Failed to cancel ride', error: err.message })
+  }
+}

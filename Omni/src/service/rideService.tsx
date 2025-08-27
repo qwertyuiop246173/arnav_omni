@@ -271,3 +271,8 @@ export const updateRideStatus = async (rideId: string, status: string) => {
         return false
     }
 }
+
+export const cancelRide = async (rideId: string) => {
+  if (!rideId) throw new Error('rideId required')
+  return apiClient.post(`/ride/${rideId}/cancel`)
+}

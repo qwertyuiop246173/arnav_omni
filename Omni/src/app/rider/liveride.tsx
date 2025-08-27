@@ -1,5 +1,5 @@
-import { View, Text, Alert } from 'react-native'
-import React, { use, useEffect, useState } from 'react'
+import { View, Text, Alert, Platform, ToastAndroid } from 'react-native'
+import React, { use, useCallback, useEffect, useRef, useState } from 'react'
 import { useRiderStore } from '@/store/riderStore';
 import { UseWS } from '@/service/WSProvider';
 import { useRoute } from '@react-navigation/native';
@@ -11,6 +11,7 @@ import RiderLiveTracking from '@/components/Rider/RiderLiveTracking';
 import RiderActionButton from '@/components/Rider/RiderActionButton';
 import { updateRideStatus } from '@/service/rideService';
 import OtpInputModal from '@/components/Rider/OtpInputModal';
+import { router } from 'expo-router';
 
 const LiveRide = () => {
     const [isOtpModalVisible, setIsOtpModalVisible] = useState(false);
@@ -19,9 +20,10 @@ const LiveRide = () => {
     const [rideData, setRideData] = useState<any>(null)
     const route = useRoute() as any
     const params = route?.params || {}
-    const id = params.id
-
-
+    const id = route?.params?.id
+    const cancelledRef = useRef(false)
+    const rideId = id ?? (rideData?._id ?? rideData?.id)
+    const bottomSheetRef = useRef<any>(null)
     // computed state: distance from rider -> pickup and whether rider can mark ARRIVED
     const [pickupDistance, setPickupDistance] = useState<number | null>(null)
     const [canArrive, setCanArrive] = useState<boolean>(false)
@@ -187,7 +189,53 @@ const LiveRide = () => {
         // id intentionally omitted from deps for continuous updates while mounted
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
+    const handleRideUpdate = useCallback((data: any) => {
+        const incoming = data?.ride ?? data
+        const incomingId = String(incoming?._id ?? incoming?.rideId ?? incoming?.id)
+        if (!incomingId || incomingId !== String(rideId)) return
+        if (cancelledRef.current) {
+            console.log('[LiveRide] ignored rideUpdate after cancel/unsubscribe', incomingId)
+            return
+        }
+        console.log('[LiveRide] socket rideUpdate received', incoming)
+        // ignore updates if local state indicates cancel
+        if (String(incoming?.status ?? '').toUpperCase() === 'CANCELLED' || String(incoming?.status ?? '').toUpperCase() === 'NO_RIDER_ALLOTTED') {
+            // close searching UI, navigate to home and show a short toast instead of alert
+            try { bottomSheetRef.current?.snapToIndex?.(0) } catch (e) { }
+            cancelledRef.current = true
+            setRideData(incoming)
+            try {
+                if (Platform.OS === 'android') {
+                    ToastAndroid.show('Ride cancelled', ToastAndroid.SHORT)
+                } else {
+                    console.log('[LiveRide] Ride cancelled - navigate to home')
+                }
+            } catch (e) { console.warn('[LiveRide] toast failed', e) }
+            router.replace('/rider/home')
+            return
+        }
+        setRideData(incoming)
+    }, [rideId])
 
+    const handleNoRider = useCallback((payload: any) => {
+        const incomingRideId = String(payload?.rideId ?? payload?.id ?? payload?._id)
+        if (!incomingRideId || incomingRideId !== String(rideId)) return
+        if (cancelledRef.current) return
+        cancelledRef.current = true
+        console.log('[LiveRide] received ride:no_rider', payload)
+        try { bottomSheetRef.current?.snapToIndex?.(0) } catch (e) { }
+        Alert.alert('No riders available', 'No riders accepted your request. Please try again.', [{ text: 'OK', onPress: () => router.replace('/customer/ridebooking') }])
+    }, [rideId])
+
+    const handleCancelled = useCallback((payload: any) => {
+        const incomingRideId = String(payload?.rideId ?? payload?.id ?? payload?._id)
+        if (!incomingRideId || incomingRideId !== String(rideId)) return
+        if (cancelledRef.current) return
+        cancelledRef.current = true
+        console.log('[LiveRide] received ride:cancelled', payload)
+        try { bottomSheetRef.current?.snapToIndex?.(0) } catch (e) { }
+        Alert.alert('Ride cancelled', 'Your ride has been cancelled.', [{ text: 'OK', onPress: () => router.replace('/customer/home') }])
+    }, [rideId])
     // useEffect(() => {
     //     if (id) {
     //         emit('subscribeRide', id)
@@ -230,73 +278,18 @@ const LiveRide = () => {
     // }, [id, emit, on, off])
     // socket subscriptions for this ride
     useEffect(() => {
-        if (!id) return
-
-        try {
-            emit && emit('subscribeRide', id)
-            console.log('[LiveRide] emitted subscribeRide', id)
-        } catch (e) {
-            console.warn('[LiveRide] emit subscribeRide failed', e)
-        }
-
-        const handleRideData = (data: any) => {
-            console.log('[LiveRide] socket rideData received', data)
-            const rideObj = data?.ride ?? data
-            setRideData(rideObj)
-            if (rideObj?.status === 'SEARCHING_FOR_RIDER') {
-                try {
-                    emit && emit('searchRide', id)
-                    console.log('[LiveRide] emitted searchRide', id)
-                } catch (e) { console.warn('[LiveRide] emit searchRide failed', e) }
-            }
-        }
-
-        const handleRideAccepted = (data: any) => {
-            console.log('[LiveRide] ride:accepted received', data)
-            const rideObj = data?.ride ?? data
-            if (!rideObj) return
-            setRideData(rideObj)
-            Alert.alert('Ride Assigned', `Ride ${rideObj._id || rideObj.id} assigned. Status: ${rideObj.status}`)
-        }
-
-        const handleRideCancelled = (error: any) => {
-            console.log('[LiveRide] socket rideCancelled', error)
-            resetAndNavigate('/rider/home')
-            Alert.alert('Ride Cancelled', error?.message || 'Ride cancelled')
-        }
-
-        const handleRideUpdate = (data: any) => {
-            console.log('[LiveRide] socket rideUpdate received', data)
-            const rideObj = data?.ride ?? data
-            setRideData(rideObj)
-        }
-
-        const handleError = (error: any) => {
-            console.log('[LiveRide] socket error', error)
-            resetAndNavigate('/rider/home')
-            Alert.alert('Error', error?.message || 'An error occurred')
-        }
-
-        on && on('rideData', handleRideData)
-        on && on('ride:accepted', handleRideAccepted)
-        on && on('rideCancelled', handleRideCancelled)
+        if (!rideId) return
         on && on('rideUpdate', handleRideUpdate)
-        on && on('error', handleError)
-        console.log('[LiveRide] socket handlers registered')
-
+        on && on('ride:no_rider', handleNoRider)
+        on && on('ride:cancelled', handleCancelled)
+        // unsub on cleanup
         return () => {
-            try {
-                off && off('rideData')
-                off && off('ride:accepted')
-                off && off('rideCancelled')
-                off && off('rideUpdate')
-                off && off('error')
-                console.log('[LiveRide] socket handlers removed')
-            } catch (e) {
-                console.warn('[LiveRide] cleanup error', e)
-            }
+            off && off('rideUpdate',)
+            off && off('ride:no_rider',)
+            off && off('ride:cancelled',)
+            cancelledRef.current = false
         }
-    }, [id, emit, on, off])
+    }, [rideId, on, off, handleRideUpdate, handleNoRider, handleCancelled])
 
     useEffect(() => {
         if (!rideData?.pickup || !location?.latitude) {
