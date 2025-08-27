@@ -13,10 +13,11 @@ import { updateRideStatus } from '@/service/rideService';
 import OtpInputModal from '@/components/Rider/OtpInputModal';
 import { router } from 'expo-router';
 
+
 const LiveRide = () => {
     const [isOtpModalVisible, setIsOtpModalVisible] = useState(false);
     const { setLocation, location, setOnDuty } = useRiderStore()
-    const { emit, on, off } = UseWS()
+    const { emit, on, off, socket } = UseWS()
     const [rideData, setRideData] = useState<any>(null)
     const route = useRoute() as any
     const params = route?.params || {}
@@ -199,21 +200,46 @@ const LiveRide = () => {
         }
         console.log('[LiveRide] socket rideUpdate received', incoming)
         // ignore updates if local state indicates cancel
+        // if (String(incoming?.status ?? '').toUpperCase() === 'CANCELLED' || String(incoming?.status ?? '').toUpperCase() === 'NO_RIDER_ALLOTTED') {
+        //     // close searching UI, navigate to home and show a short toast instead of alert
+        //     try { bottomSheetRef.current?.snapToIndex?.(0) } catch (e) { }
+        //     cancelledRef.current = true
+        //     setRideData(incoming)
+        //     try {
+        //         if (Platform.OS === 'android') {
+        //             ToastAndroid.show('Ride cancelled', ToastAndroid.SHORT)
+        //         } else {
+        //             console.log('[LiveRide] Ride cancelled - navigate to home')
+        //         }
+        //     } catch (e) { console.warn('[LiveRide] toast failed', e) }
+        //     router.replace('/rider/home')
+        //     return
+        // }
+
         if (String(incoming?.status ?? '').toUpperCase() === 'CANCELLED' || String(incoming?.status ?? '').toUpperCase() === 'NO_RIDER_ALLOTTED') {
-            // close searching UI, navigate to home and show a short toast instead of alert
-            try { bottomSheetRef.current?.snapToIndex?.(0) } catch (e) { }
-            cancelledRef.current = true
-            setRideData(incoming)
+            // close bottom sheet / swipe UI, clear ride data so tracking UI hides,
+            // mark cancelled and turn off duty, show toast, then navigate home.
             try {
-                if (Platform.OS === 'android') {
-                    ToastAndroid.show('Ride cancelled', ToastAndroid.SHORT)
-                } else {
-                    console.log('[LiveRide] Ride cancelled - navigate to home')
-                }
+                bottomSheetRef.current?.snapToIndex?.(0)
+                console.log('[LiveRide] closed bottom sheet due to cancellation')
+            } catch (e) { console.warn('[LiveRide] close bottom sheet failed', e) }
+            cancelledRef.current = true
+            // clear rideData so RiderLiveTracking and action buttons are removed
+            setRideData(null)
+            try { setOnDuty && setOnDuty(false) } catch (e) { /* ignore */ }
+
+            try {
+                if (Platform.OS === 'android') ToastAndroid.show('Ride cancelled', ToastAndroid.SHORT)
+                else console.log('[LiveRide] Ride cancelled - will navigate home')
             } catch (e) { console.warn('[LiveRide] toast failed', e) }
-            router.replace('/rider/home')
+
+            // small delay to allow UI to close before navigation
+            setTimeout(() => {
+                try { resetAndNavigate('/rider/home') } catch (e) { try { router.replace('/rider/home') } catch (e2) { console.warn('[LiveRide] navigate home failed', e2) } }
+            }, 300)
             return
         }
+
         setRideData(incoming)
     }, [rideId])
 
@@ -316,6 +342,51 @@ const LiveRide = () => {
         setPickupDistance(dist)
         setCanArrive(dist <= ARRIVE_THRESHOLD_METERS)
     }, [rideData?.pickup, location?.latitude, location?.longitude])
+    useEffect(() => {
+        if (!rideId) return
+        const handleCustomerCancelled = (payload: any) => {
+            try {
+                console.log('[LiveRide] ride:cancelled event received', payload)
+                const r = payload?.ride ?? payload
+                const incoming = String(r?._id ?? r?.rideId ?? r?.id ?? '')
+                if (incoming && String(incoming) !== String(rideId)) {
+                    console.log('[LiveRide] ride:cancelled ignored for other ride', incoming)
+                    return
+                }
+                // inform rider
+                try {
+                    if (Platform.OS === 'android') ToastAndroid.show('Customer has cancelled the ride', ToastAndroid.SHORT)
+                    else Alert.alert('Ride Cancelled', 'Customer has cancelled the ride')
+                } catch (e) {
+                    console.warn('[LiveRide] show cancel notification failed', e)
+                }
+                // cleanup and go back to rider home
+                try { resetAndNavigate('/rider/home') } catch (e) { console.warn('[LiveRide] navigation after cancel failed', e) }
+            } catch (e) {
+                console.warn('[LiveRide] handleCustomerCancelled error', e)
+            }
+        }
+        try {
+            on && on('ride:cancelled', handleCustomerCancelled)
+            socket && socket.on && socket.on('ride:cancelled', handleCustomerCancelled)
+            console.log('[LiveRide] registered ride:cancelled handler')
+        } catch (e) {
+            console.warn('[LiveRide] register ride:cancelled failed', e)
+        }
+
+        return () => {
+
+            try { off && off('ride:cancelled') } catch (e) { /* ignore */ }
+            try { socket && socket.off && socket.off('ride:cancelled', handleCustomerCancelled) } catch (e) { /* ignore */ }
+        }
+    }, [rideId, on, off, socket])
+
+    useEffect(() => {
+        // on mount clear navigating lock
+        // existing subscribe logic...
+    }, [])
+
+
 
     return (
         <View style={rideStyles.container}>

@@ -1,5 +1,5 @@
 import { View, Text, Image, TouchableOpacity, Platform, Alert, ToastAndroid } from 'react-native'
-import React, { FC, memo, useEffect } from 'react'
+import React, { FC, memo, useEffect, useRef } from 'react'
 import { acceptRideOffer } from '@/service/rideService'
 import { useRiderStore } from '@/store/riderStore'
 import Animated, { FadeInLeft, FadeOutRight } from 'react-native-reanimated'
@@ -16,6 +16,7 @@ import { apiClient } from '@/service/apiIntereptors'
 import { tokenStorage } from '@/store/storage'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as  jwt_decode from 'jwt-decode'
+
 
 type VehicleType = 'bike' | 'auto' | 'cabEconomy' | 'cabPremium'
 
@@ -36,6 +37,7 @@ const RiderRidesItem: FC<{ item: RideItem; removeIt: () => void }> = ({ item, re
     const { emit, on, off, socket } = UseWS() as any
     const userStore = useUserStore?.() as any
     const currentUserId = userStore?.user?._id || null
+    const navigatingRef = useRef<boolean>(false)
     // const acceptRide = async () => {
     //     acceptRideOffer(item?._id)
     // }
@@ -430,19 +432,37 @@ const RiderRidesItem: FC<{ item: RideItem; removeIt: () => void }> = ({ item, re
                         return
                     }
 
+                    // acceptedHandled = true
+                    // console.log('[RiderRidesItem] server confirmed accept -> navigating', incoming)
+                    // try {
+                    //     router.replace({ pathname: '/rider/liveride', params: { id: incoming } })
+                    //     console.log('[RiderRidesItem] router.replace(object) called')
+                    // } catch (navErr) {
+                    //     console.warn('[RiderRidesItem] router.replace(object) failed, trying string route', navErr)
+                    //     try { router.replace(`/rider/liveride?id=${incoming}`); console.log('[RiderRidesItem] router.replace(string) called') } catch (e2) { console.warn('[RiderRidesItem] router.replace(string) failed', e2) }
+                    // }
+
+                    // ensure single navigation only
+                    if (navigatingRef.current) {
+                        console.log('[RiderRidesItem] navigation already in progress, ignoring duplicate')
+                        return
+                    }
+                    navigatingRef.current = true
                     acceptedHandled = true
                     console.log('[RiderRidesItem] server confirmed accept -> navigating', incoming)
+                    // cleanup listeners before navigating
+                    cleanupHandlers()
                     try {
-                        router.replace({ pathname: '/rider/liveride', params: { id: incoming } })
-                        console.log('[RiderRidesItem] router.replace(object) called')
+                        // prefer simple string route to avoid router object issues
+                        router.replace(`/rider/liveride?id=${incoming}`)
+                        console.log('[RiderRidesItem] router.replace(string) called')
                     } catch (navErr) {
-                        console.warn('[RiderRidesItem] router.replace(object) failed, trying string route', navErr)
-                        try { router.replace(`/rider/liveride?id=${incoming}`); console.log('[RiderRidesItem] router.replace(string) called') } catch (e2) { console.warn('[RiderRidesItem] router.replace(string) failed', e2) }
+                        console.warn('[RiderRidesItem] navigation failed', navErr)
                     }
                 } catch (err) {
                     console.warn('[RiderRidesItem] handleAccepted unexpected error', err)
                 } finally {
-                    cleanupHandlers()
+                    // cleanupHandlers()
                 }
             }
 
@@ -461,11 +481,19 @@ const RiderRidesItem: FC<{ item: RideItem; removeIt: () => void }> = ({ item, re
             } catch (e) { console.warn('[RiderRidesItem] socket.on registration failed', e) }
 
             // fallback: if no server confirmation within 12s, navigate optimistically and log
+            // confirmTimer = setTimeout(() => {
+            //     if (!acceptedHandled) {
+            //         console.warn('[RiderRidesItem] no accept confirmation received within timeout -> optimistic navigate', rideId)
+            //         try { router.replace({ pathname: '/rider/liveride', params: { id: rideId } }) } catch (navErr) { console.warn('[RiderRidesItem] optimistic navigation failed', navErr) }
+            //         cleanupHandlers()
+            //     }
+            // }, 12000)
             confirmTimer = setTimeout(() => {
-                if (!acceptedHandled) {
+                if (!acceptedHandled && !navigatingRef.current) {
+                    navigatingRef.current = true
                     console.warn('[RiderRidesItem] no accept confirmation received within timeout -> optimistic navigate', rideId)
-                    try { router.replace({ pathname: '/rider/liveride', params: { id: rideId } }) } catch (navErr) { console.warn('[RiderRidesItem] optimistic navigation failed', navErr) }
                     cleanupHandlers()
+                    try { router.replace(`/rider/liveride?id=${rideId}`) } catch (navErr) { console.warn('[RiderRidesItem] optimistic navigation failed', navErr) }
                 }
             }, 12000)
 

@@ -169,7 +169,7 @@ const LiveTrackingSheet: FC<{ item: RideItem }> = ({ item }) => {
                 </View>
             </View>
             <View style={rideStyles.bottomButtonContainer}>
-                {item?.status === 'ARRIVING' ?
+                {item?.status === 'ARRIVING' || item?.status === 'ARRIVED' ?
                     (
                         <TouchableOpacity
                             style={rideStyles.cancelButton}
