@@ -279,11 +279,24 @@ const LiveRide = () => {
     // socket subscriptions for this ride
     useEffect(() => {
         if (!rideId) return
+        console.log('[LiveRide] subscribing to ride events for', rideId, 'route params id=', id)
+        // subscribe to ride room on server so server will send rideData updates to this socket
+        try { emit && emit('subscribeRide', rideId); console.log('[LiveRide] emit subscribeRide', rideId) } catch (e) { console.warn('[LiveRide] emit subscribeRide failed', e) }
+        // also listen for full rideData payloads
+        const handleRideDataRaw = (data: any) => {
+            try {
+                console.log('[LiveRide] rideData event received (raw)', data)
+                const r = data?.ride ?? data
+                setRideData(r)
+            } catch (e) { console.warn('[LiveRide] handleRideDataRaw failed', e) }
+        }
+        on && on('rideData', handleRideDataRaw)
         on && on('rideUpdate', handleRideUpdate)
         on && on('ride:no_rider', handleNoRider)
         on && on('ride:cancelled', handleCancelled)
         // unsub on cleanup
         return () => {
+            off && off('rideData')
             off && off('rideUpdate',)
             off && off('ride:no_rider',)
             off && off('ride:cancelled',)
@@ -396,11 +409,23 @@ const LiveRide = () => {
                         const isSuccess = await updateRideStatus(rideData?.id || rideData?._id, requestedStatus)
                         console.log('[LiveRide] updateRideStatus returned:', isSuccess, 'requestedStatus=', requestedStatus)
                         if (isSuccess) {
-                            Alert.alert('Ride Completed', 'The ride has been successfully completed.')
+                            try {
+                                if (Platform.OS === 'android') {
+                                    ToastAndroid.show('Ride Completed: The ride has been successfully completed.', ToastAndroid.SHORT)
+                                } else {
+                                    Alert.alert('Ride Completed', 'The ride has been successfully completed.')
+                                }
+                            } catch (e) { console.warn('[LiveRide] show completion toast failed', e) }
                             setRideData((prev: Record<string, any> | null) => prev ? { ...prev, status: requestedStatus } : prev)
                             resetAndNavigate('/rider/home')
                         } else {
-                            Alert.alert('Error', 'Failed to complete the ride. Please try again.')
+                            try {
+                                if (Platform.OS === 'android') {
+                                    ToastAndroid.show('Error: Failed to complete the ride. Please try again.', ToastAndroid.SHORT)
+                                } else {
+                                    Alert.alert('Error', 'Failed to complete the ride. Please try again.')
+                                }
+                            } catch (e) { console.warn('[LiveRide] show error toast failed', e) }
                         }
                     }}
                     color="#228B22"

@@ -266,40 +266,78 @@ const RiderRidesItem: FC<{ item: RideItem; removeIt: () => void }> = ({ item, re
     // }
 
     const onAccept = async () => {
+        console.log('[RiderRidesItem] onAccept start', { rideId: item?._id })
         try {
-            const rideId = item?._id
-            if (!rideId) return
-            // fetch latest ride state from server to validate offer still valid
+            const rideId = String(item?._id)
+            if (!rideId) {
+                console.warn('[RiderRidesItem] onAccept aborted: missing rideId')
+                return
+            }
+
+            console.log('[RiderRidesItem] fetching latest ride from server', rideId)
             let ride: any = null
             try {
                 const res = await apiClient.get(`/ride/${rideId}`)
                 ride = res?.data?.ride ?? res?.data ?? res
+                console.log('[RiderRidesItem] fetched ride', { rideId, status: ride?.status, offeredTo: ride?.offeredTo, rider: ride?.rider })
             } catch (e) {
-                console.warn('[RiderRidesItem] failed to fetch ride before accept', e)
+                console.warn('[RiderRidesItem] failed to fetch ride before accept - continuing with item snapshot', e)
+                ride = item?.raw ?? item
             }
 
             const status = String(ride?.status ?? '').toUpperCase()
-            if (['CANCELLED', 'COMPLETED', 'NO_RIDER_ALLOTTED'].includes(status)) {
-                const msg = 'Ride offer cancelled'
-                if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.SHORT)
-                else Alert.alert(msg)
-                return
-            }
-            const offered = Array.isArray(ride?.offeredTo) ? ride.offeredTo.map(String) : []
-            if (offered.length && !offered.includes(String(currentUserId))) {
-                const msg = 'Offer cancelled for you'
+            console.log('[RiderRidesItem] current ride status', status)
+            if (['CANCELLED', 'COMPLETED', 'NO_RIDER_ALLOTTED', 'EXPIRED'].includes(status)) {
+                const msg = 'Ride offer no longer available'
+                console.warn('[RiderRidesItem] aborting accept - status invalid', status)
                 if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.SHORT)
                 else Alert.alert(msg)
                 return
             }
 
-            // proceed with existing accept flow (emit + navigate)
-            console.log('[RiderRidesItem] Accept pressed for ride', rideId)
+            // check offeredTo contains current user (if offeredTo exists)
+            const offeredArr = Array.isArray(ride?.offeredTo) ? ride.offeredTo.map(String) : []
+            console.log('[RiderRidesItem] offeredTo list', offeredArr)
+            if (offeredArr.length && currentUserId && !offeredArr.includes(String(currentUserId))) {
+                const msg = 'Offer not available for you'
+                console.warn('[RiderRidesItem] current user not in offeredTo -> abort', { currentUserId, rideId })
+                if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.SHORT)
+                else Alert.alert(msg)
+                removeIt && removeIt()
+                return
+            }
 
+            // check whether another rider already assigned
+            if (ride?.rider && String(ride?.rider) !== '' && String(ride?.rider) !== String(currentUserId)) {
+                console.warn('[RiderRidesItem] another rider already assigned -> abort', { assignedRider: ride?.rider })
+                const msg = 'Ride already taken by another rider'
+                if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.SHORT)
+                else Alert.alert(msg)
+                removeIt && removeIt()
+                return
+            }
+
+            console.log('[RiderRidesItem] validations passed - resolving riderId')
+            // resolve riderId with fallbacks
             let riderId = currentUserId || item?.riderId || item?.raw?.rider?._id || null
-            const customerSocketId = item?.customerSocketId || item?.raw?.customerSocketId || null
-            const price = Number(item?.fare ?? item?.price ?? 0)
-            // try decode token from local storage (fast, no network) using jwt-decode
+
+            // lightweight in-file jwt payload decoder (no external dep)
+            const decodeJwtPayload = (token?: string) => {
+                if (!token || typeof token !== 'string') return null
+                try {
+                    const parts = token.split('.')
+                    if (parts.length < 2) return null
+                    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+                    const pad = payload.length % 4
+                    const padded = payload + (pad ? '='.repeat(4 - pad) : '')
+                    const raw = (typeof atob === 'function')
+                        ? atob(padded)
+                        : (typeof Buffer !== 'undefined' ? Buffer.from(padded, 'base64').toString('utf8') : null)
+                    if (!raw) return null
+                    return JSON.parse(raw)
+                } catch (e) { return null }
+            }
+
             if (!riderId) {
                 try {
                     const tok =
@@ -309,21 +347,21 @@ const RiderRidesItem: FC<{ item: RideItem; removeIt: () => void }> = ({ item, re
                         (await AsyncStorage.getItem('accessToken')) ||
                         (await AsyncStorage.getItem('token')) ||
                         null
-
                     if (tok) {
-                        try {
-                            const payload: any = (jwt_decode as any)(String(tok))
+                        const payload: any = decodeJwtPayload(String(tok))
+                        if (payload) {
                             riderId = payload?.id || payload?._id || payload?.userId || riderId || null
-                            console.log('[RiderRidesItem] decoded riderId from token via jwt-decode', riderId)
-                        } catch (e) {
-                            console.warn('[RiderRidesItem] jwt-decode failed', e)
+                            console.log('[RiderRidesItem] decoded riderId from token', riderId)
+                        } else {
+                            console.warn('[RiderRidesItem] token present but decode failed')
                         }
                     }
                 } catch (e) {
                     console.warn('[RiderRidesItem] token read/decode failed', e)
                 }
             }
-            // fallback: also check socket.user (socket auth middleware may have injected user)
+
+            // fallback: socket.user
             if (!riderId) {
                 try {
                     const sockUserId = (socket as any)?.user?.id || (socket as any)?.user?._id
@@ -333,7 +371,8 @@ const RiderRidesItem: FC<{ item: RideItem; removeIt: () => void }> = ({ item, re
                     }
                 } catch (e) { /* ignore */ }
             }
-            // fallback: try /auth/me if still missing
+
+            // final fallback: /auth/me
             if (!riderId) {
                 try {
                     console.log('[RiderRidesItem] riderId missing, calling /auth/me as fallback')
@@ -350,18 +389,87 @@ const RiderRidesItem: FC<{ item: RideItem; removeIt: () => void }> = ({ item, re
                 return
             }
 
+            const customerSocketId = item?.customerSocketId || item?.raw?.customerSocketId || null
+            const price = Number(item?.fare ?? item?.price ?? 0)
             const offerPayload = { rideId, riderId, price, customerSocketId, riderSocketId: socket?.id || null }
             console.log('[RiderRidesItem] emitting offer:accept', offerPayload)
             emit && emit('offer:accept', offerPayload)
-            try {
-                const rid = item?._id
-                if (rid) {
-                    console.log('[RiderRidesItem] navigating to rider live ride for', rid)
-                    router.replace(`/rider/liveride?id=${rid}`)
-                }
-            } catch (navErr) {
-                console.warn('[RiderRidesItem] navigation failed', navErr)
+
+            // wait for server confirmation (ride:accepted / offer:accepted) before navigating
+            let acceptedHandled = false
+            let confirmTimer: ReturnType<typeof setTimeout> | null = null
+
+            const cleanupHandlers = () => {
+                try {
+                    off && off('ride:accepted', handleAccepted)
+                    off && off('offer:accepted', handleAccepted)
+                    off && off('rideAccepted', handleAccepted)
+                    off && off('offerAccepted', handleAccepted)
+                } catch (e) { /* ignore */ }
+                try {
+                    socket && socket.off && socket.off('ride:accepted', handleAccepted)
+                    socket && socket.off && socket.off('offer:accepted', handleAccepted)
+                    socket && socket.off && socket.off('rideAccepted', handleAccepted)
+                    socket && socket.off && socket.off('offerAccepted', handleAccepted)
+                } catch (e) { /* ignore */ }
+                if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null }
             }
+
+            const handleAccepted = (payload: any) => {
+                try {
+                    console.log('[RiderRidesItem] accept confirmation payload (raw)', payload)
+                    const r = payload?.ride ?? payload
+                    const incoming = String(r?._id ?? r?.rideId ?? r?.id ?? '')
+                    console.log('[RiderRidesItem] incoming id', incoming, 'expected rideId', String(rideId))
+                    if (!incoming) {
+                        console.warn('[RiderRidesItem] incoming id missing in payload', r)
+                        return
+                    }
+                    if (String(incoming) !== String(rideId)) {
+                        console.warn('[RiderRidesItem] id mismatch - ignoring confirmation', { incoming, rideId })
+                        return
+                    }
+
+                    acceptedHandled = true
+                    console.log('[RiderRidesItem] server confirmed accept -> navigating', incoming)
+                    try {
+                        router.replace({ pathname: '/rider/liveride', params: { id: incoming } })
+                        console.log('[RiderRidesItem] router.replace(object) called')
+                    } catch (navErr) {
+                        console.warn('[RiderRidesItem] router.replace(object) failed, trying string route', navErr)
+                        try { router.replace(`/rider/liveride?id=${incoming}`); console.log('[RiderRidesItem] router.replace(string) called') } catch (e2) { console.warn('[RiderRidesItem] router.replace(string) failed', e2) }
+                    }
+                } catch (err) {
+                    console.warn('[RiderRidesItem] handleAccepted unexpected error', err)
+                } finally {
+                    cleanupHandlers()
+                }
+            }
+
+            // register handlers (wrapper + direct socket)
+            try {
+                on && on('ride:accepted', handleAccepted)
+                on && on('offer:accepted', handleAccepted)
+                on && on('rideAccepted', handleAccepted)
+                on && on('offerAccepted', handleAccepted)
+            } catch (e) { console.warn('[RiderRidesItem] UseWS.on registration failed', e) }
+            try {
+                socket && socket.on && socket.on('ride:accepted', handleAccepted)
+                socket && socket.on && socket.on('offer:accepted', handleAccepted)
+                socket && socket.on && socket.on('rideAccepted', handleAccepted)
+                socket && socket.on && socket.on('offerAccepted', handleAccepted)
+            } catch (e) { console.warn('[RiderRidesItem] socket.on registration failed', e) }
+
+            // fallback: if no server confirmation within 12s, navigate optimistically and log
+            confirmTimer = setTimeout(() => {
+                if (!acceptedHandled) {
+                    console.warn('[RiderRidesItem] no accept confirmation received within timeout -> optimistic navigate', rideId)
+                    try { router.replace({ pathname: '/rider/liveride', params: { id: rideId } }) } catch (navErr) { console.warn('[RiderRidesItem] optimistic navigation failed', navErr) }
+                    cleanupHandlers()
+                }
+            }, 12000)
+
+            // remove UI offer immediately to avoid duplicate taps
             removeIt && removeIt()
         } catch (e) {
             console.error('[RiderRidesItem] accept error', e)

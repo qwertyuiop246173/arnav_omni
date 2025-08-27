@@ -156,16 +156,59 @@ const handleSocketConnection = (io) => {
           socket.to(`rider_${user.id}`).emit("riderLocationUpdate", { riderId: user.id, coords });
         }
       });
+      // socket.on('offer:accept', async (payload) => {
+      //   console.log('[sockets] offer:accept received from', socket.id, 'payload=', payload)
+      //   try {
+      //     console.log('[sockets] offer:accept', payload, 'from', socket.id)
+      //     const { rideId, riderId, price } = payload || {}
+      //     if (!rideId || !riderId) return socket.emit('error', { message: 'Missing rideId or riderId in offer accept' })
+      //     // generate OTP and log it
+      //     const otp = generateOtp()
+      //     console.log('[sockets] generated OTP', otp, 'for ride', rideId)
+      //     // assign rider and mark ARRIVING
+      //     const updated = await Ride.findByIdAndUpdate(
+      //       rideId,
+      //       {
+      //         $set: {
+      //           rider: riderId,
+      //           status: 'ARRIVING',
+      //           otp,
+      //           acceptedOffer: { rider: riderId, price, acceptedAt: new Date() }
+      //         }
+      //       },
+      //       { new: true }
+      //     ).populate('rider customer').lean().exec()
+
+      //     if (!updated) return socket.emit('error', { message: 'Ride not found' })
+      //     console.log('[sockets] offer:accept updated ride', updated._id, 'status->', updated.status)
+      //     // notify room and customer
+      //     console.log('[sockets] emitting rideData to room ride:' + rideId, updated);
+      //     io.to(`ride:${rideId}`).emit('rideData', { ride: updated })
+      //     console.log('[sockets] emitted rideData to room ride:' + rideId)
+      //     if (payload.customerSocketId) {
+      //       io.to(payload.customerSocketId).emit('ride:accepted', { ride: updated })
+      //       console.log('[sockets] emitted ride:accepted to customer socket', payload.customerSocketId)
+      //     }
+      //     // ack to rider
+      //     io.to(socket.id).emit('offer:accepted:ack', { ride: updated })
+      //     console.log('[sockets] sent offer:accepted:ack to rider socket', socket.id)
+      //     console.log('[sockets] offer accepted -> ARRIVING', rideId)
+      //   } catch (err) {
+      //     console.error('[sockets] offer:accept error', err)
+      //     socket.emit('error', { message: 'Failed to accept offer' })
+      //   }
+      // })
       socket.on('offer:accept', async (payload) => {
-        console.log('[sockets] offer:accept received from', socket.id, 'payload=', payload)
         try {
-          console.log('[sockets] offer:accept', payload, 'from', socket.id)
+          console.log('[sockets] offer:accept payload', payload)
           const { rideId, riderId, price } = payload || {}
-          if (!rideId || !riderId) return socket.emit('error', { message: 'Missing rideId or riderId in offer accept' })
-          // generate OTP and log it
+          if (!rideId || !riderId) {
+            console.warn('[sockets] offer:accept missing rideId or riderId', payload)
+            return socket.emit('error', { message: 'Missing rideId or riderId' })
+          }
+
+          // generate OTP and update ride: assign rider and mark ARRIVING
           const otp = generateOtp()
-          console.log('[sockets] generated OTP', otp, 'for ride', rideId)
-          // assign rider and mark ARRIVING
           const updated = await Ride.findByIdAndUpdate(
             rideId,
             {
@@ -173,29 +216,48 @@ const handleSocketConnection = (io) => {
                 rider: riderId,
                 status: 'ARRIVING',
                 otp,
-                acceptedOffer: { rider: riderId, price, acceptedAt: new Date() }
+                acceptedOffer: { rider: riderId, price: Number(price || 0), acceptedAt: new Date() }
               }
             },
             { new: true }
           ).populate('rider customer').lean().exec()
 
-          if (!updated) return socket.emit('error', { message: 'Ride not found' })
+          if (!updated) {
+            console.warn('[sockets] offer:accept ride not found', rideId)
+            return socket.emit('error', { message: 'Ride not found' })
+          }
+
           console.log('[sockets] offer:accept updated ride', updated._id, 'status->', updated.status)
-          // notify room and customer
-          console.log('[sockets] emitting rideData to room ride:' + rideId, updated);
+
+          // Broadcast updated ride to anyone subscribed to the ride room
           io.to(`ride:${rideId}`).emit('rideData', { ride: updated })
           console.log('[sockets] emitted rideData to room ride:' + rideId)
-          if (payload.customerSocketId) {
+
+          // Notify customer directly if customerSocketId provided in payload
+          if (payload?.customerSocketId) {
             io.to(payload.customerSocketId).emit('ride:accepted', { ride: updated })
             console.log('[sockets] emitted ride:accepted to customer socket', payload.customerSocketId)
           }
-          // ack to rider
-          io.to(socket.id).emit('offer:accepted:ack', { ride: updated })
-          console.log('[sockets] sent offer:accepted:ack to rider socket', socket.id)
-          console.log('[sockets] offer accepted -> ARRIVING', rideId)
+
+          // Notify the chosen rider using onDuty map helper
+          try {
+            const riderSocketInstance = getRiderSocket(riderId)
+            if (riderSocketInstance) {
+              riderSocketInstance.emit('ride:accepted', { ride: updated, byRider: riderId })
+              console.log('[sockets] emitted ride:accepted to rider', riderId, 'socket', riderSocketInstance.id)
+            } else {
+              console.log('[sockets] rider socket not found for riderId', riderId)
+            }
+          } catch (err) {
+            console.warn('[sockets] notify rider failed', err)
+          }
+
+          // Acknowledge origin (rider) who sent offer:accept
+          io.to(socket.id).emit('offer:accepted', { ride: updated })
+          console.log('[sockets] confirmed offer:accepted to origin socket', socket.id, 'ride', updated._id)
         } catch (err) {
           console.error('[sockets] offer:accept error', err)
-          socket.emit('error', { message: 'Failed to accept offer' })
+            + socket.emit('error', { message: 'Failed to accept offer', error: err?.message || String(err) })
         }
       })
 
