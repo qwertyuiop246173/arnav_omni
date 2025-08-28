@@ -77,7 +77,7 @@ const LocationSelection = () => {
     if (distance < minDistance) {
       alert(`Pickup and Drop locations must be at least ${minDistance} meters apart.`)
     } else if (distance > maxDistance) {
-      alert(`Pickup and Drop locations must be within ${maxDistance} meters.`)
+      alert(`Pickup and Drop locations must be within ${maxDistance} Kilometers.`)
     } else {
       setLocations([])
       router.navigate({

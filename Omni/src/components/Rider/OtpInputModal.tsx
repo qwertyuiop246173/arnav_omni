@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet, Modal, TextInput, TouchableOpacity } from 'react-native'
-import React, { FC, memo, useRef, useState } from 'react'
+import { View, Text, StyleSheet, Modal, TextInput, TouchableOpacity, Alert } from 'react-native'
+import React, { FC, memo, useEffect, useRef, useState } from 'react'
 import { modalStyles } from '@/styles/modalStyles'
 
 interface OtpInputModalProps {
@@ -7,12 +7,14 @@ interface OtpInputModalProps {
   onClose: () => void
   title: string
   onConfirm: (otp: string) => void
+  expectedOtp?: string
 }
 
-const OtpInputModal: FC<OtpInputModalProps> = ({ visible, onClose, title, onConfirm }) => {
+const OtpInputModal: FC<OtpInputModalProps> = ({ visible, onClose, title, onConfirm, expectedOtp }) => {
 
   const [otp, setOtp] = useState(["", "", "", ""])
   const inputs = useRef<Array<any>>([])
+  const submittedRef = useRef(false)
   const handleOtpChange = (value: string, index: number) => {
     if (/^\d$/.test(value) || value === "") {
       const newOtp = [...otp]
@@ -29,15 +31,56 @@ const OtpInputModal: FC<OtpInputModalProps> = ({ visible, onClose, title, onConf
     }
   }
 
+  // reset helper
+  const resetOtp = () => {
+    setOtp(["", "", "", ""])
+    submittedRef.current = false
+    try { inputs.current[0] && inputs.current[0].focus() } catch (e) { /* ignore */ }
+  }
+
+  // reset submitted state when modal becomes visible
+  useEffect(() => {
+    if (visible) {
+      submittedRef.current = false
+      resetOtp()
+    }
+  }, [visible])
+
+  // auto-confirm when expectedOtp matches entered OTP
+  useEffect(() => {
+    const joined = otp.join('')
+    if (joined.length !== 4) return
+    if (submittedRef.current) return
+
+    // mark submitted to avoid duplicate calls
+    submittedRef.current = true
+
+    if (typeof expectedOtp === 'string' && expectedOtp.length === 4) {
+      if (joined === expectedOtp) {
+        try { onConfirm(joined) } catch (e) { console.warn('[OtpInputModal] onConfirm failed', e) }
+        resetOtp()
+      } else {
+        Alert.alert('Invalid OTP', 'The entered OTP is incorrect.')
+        // allow retry
+        submittedRef.current = false
+        resetOtp()
+      }
+    } else {
+      // no expected provided: treat auto-fill as confirm action
+      try { onConfirm(joined) } catch (e) { console.warn('[OtpInputModal] onConfirm failed', e) }
+      resetOtp()
+    }
+  }, [otp, expectedOtp, onConfirm])
+
   const handleConfirm = () => {
     const otpValue = otp.join("")
-    if (otpValue.length === 4) {
+    if (otpValue.length === 4 && !submittedRef.current) {
+      submittedRef.current = true
       onConfirm(otpValue)
     } else {
       alert("Please enter a valid OTP")
     }
   }
-
   return (
     <Modal
       animationType="slide"
@@ -50,7 +93,7 @@ const OtpInputModal: FC<OtpInputModalProps> = ({ visible, onClose, title, onConf
           {otp.map((digit, index) => (
             <TextInput
               key={index}
-              ref={(ref) => {inputs.current[index] = ref}}
+              ref={(ref) => { inputs.current[index] = ref }}
               value={digit}
               onChangeText={(value) => handleOtpChange(value, index)}
               style={styles.otpInput}

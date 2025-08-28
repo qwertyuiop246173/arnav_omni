@@ -2,7 +2,7 @@
   "expo": {
     "name": "Omni",
     "slug": "rideapp",
-    "owner": "milton6",
+    "owner": "yadueas",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./src/assets/images/icon.png",
@@ -57,7 +57,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "03eba696-ed4f-4c8e-8eae-4571b2dc806d"
+        "projectId": "170fc5f0-0dab-4ffb-b1d6-57c11835ad67"
       }
     }
   }
