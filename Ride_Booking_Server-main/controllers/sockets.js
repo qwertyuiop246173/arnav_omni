@@ -544,6 +544,46 @@ const handleSocketConnection = (io) => {
       }
     });
 
+    socket.on('customer:cancel', async (payload) => {
+      console.log('[sockets] received customer:cancel', { fromSocket: socket.id, payload })
+      try {
+        const rideId = payload?.rideId ?? payload
+        if (!rideId) {
+          socket.emit('error', { message: 'customer:cancel missing rideId' })
+          return
+        }
+        console.log('[sockets] customer:cancel received', { socketId: socket.id, rideId })
+
+        // clear any pending auto-offer timer
+        try { clearPendingTimerForRide(String(rideId)) } catch (e) { /* ignore */ }
+
+        // atomically update status unless already completed/cancelled
+        const updated = await Ride.findOneAndUpdate(
+          { _id: String(rideId), status: { $nin: ['COMPLETED', 'RIDE_CANCELLED_BY_CUSTOMER', 'RIDE_CANCELLED_BY_RIDER', 'CANCELLED'] } },
+          { $set: { status: 'RIDE_CANCELLED_BY_CUSTOMER' } },
+          { new: true }
+        ).lean().exec()
+
+        if (!updated) {
+          console.log('[sockets] customer:cancel no update (ride missing or already final)', rideId)
+          socket.emit('error', { message: 'Ride not cancelled (already final or not found)', rideId })
+          return
+        }
+
+        console.log('[sockets] ride marked RIDE_CANCELLED_BY_CUSTOMER', rideId)
+
+        // notify the customer socket
+        try { socket.emit('ride:cancelled', { ride: updated }) } catch (e) { console.warn('[sockets] emit to customer failed', e) }
+
+        // notify any subscribers (rider room / other sockets subscribed to this ride)
+        try { io.to(`ride:${String(rideId)}`).emit('ride:cancelled', { ride: updated }) } catch (e) { console.warn('[sockets] emit ride:cancelled room failed', e) }
+        try { io.to(`ride:${String(rideId)}`).emit('rideData', { ride: updated }) } catch (e) { console.warn('[sockets] emit rideData room failed', e) }
+      } catch (err) {
+        console.warn('[sockets] customer:cancel handler failed', err)
+        try { socket.emit('error', { message: 'Failed to cancel ride', error: err?.message || String(err) }) } catch (e) { }
+      }
+    })
+
 
     // Rider sends offer back to a customer; server forwards to customer socket
     socket.on("offer:send", (offer) => {

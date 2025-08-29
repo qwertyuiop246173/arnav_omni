@@ -200,10 +200,11 @@ const LiveRide = () => {
     useEffect(() => {
         if (!id) return
         console.log('[LiveRide] registering offer listeners for ride', id)
-
         const handleRideOffer = (offer: any) => {
             try {
+                console.log('[LiveRide] << OFFER_HANDLER start >>', { offer })
                 console.log('[LiveRide] ride:offer received', offer)
+                console.log('[LiveRide] normalizing offer...')
                 const normalized = {
                     _id: offer?.rideId || offer?.ride?._id || Math.random().toString(),
                     riderId: offer?.riderId || offer?.fromSocket || offer?.rider?._id || offer?.from,
@@ -211,33 +212,64 @@ const LiveRide = () => {
                     riderInfo: offer?.rider ?? offer?.from ?? null,
                     raw: offer
                 }
+                console.log('[LiveRide] normalized offer', normalized)
                 setOffers(prev => {
                     if (prev.some(p => p._id === normalized._id && p.riderId === normalized.riderId)) {
                         console.log('[LiveRide] duplicate offer ignored', normalized._id)
+                        console.log('[LiveRide] duplicate offer ignored', normalized._id)
                         return prev
                     }
+
                     console.log('[LiveRide] appending offer', normalized)
                     return [normalized, ...prev]
                 })
                 // quick notification
                 Alert.alert('New Offer', `Offer ₹${normalized.price}`)
+                console.log('[LiveRide] << OFFER_HANDLER end >>', { offerId: normalized._id })
             } catch (e) {
                 console.warn('[LiveRide] handleRideOffer error', e)
             }
         }
-
+        // const handleRideOffer = (offer: any) => {
+        //     try {
+        //         console.log('[LiveRide] ride:offer received', offer)
+        //         const normalized = {
+        //             _id: offer?.rideId || offer?.ride?._id || Math.random().toString(),
+        //             riderId: offer?.riderId || offer?.fromSocket || offer?.rider?._id || offer?.from,
+        //             price: Number(offer?.price ?? offer?.fare ?? 0),
+        //             riderInfo: offer?.rider ?? offer?.from ?? null,
+        //             raw: offer
+        //         }
+        //         setOffers(prev => {
+        //             if (prev.some(p => p._id === normalized._id && p.riderId === normalized.riderId)) {
+        //                 console.log('[LiveRide] duplicate offer ignored', normalized._id)
+        //                 return prev
+        //             }
+        //             console.log('[LiveRide] appending offer', normalized)
+        //             return [normalized, ...prev]
+        //         })
+        //         // quick notification
+        //         Alert.alert('New Offer', `Offer ₹${normalized.price}`)
+        //     } catch (e) {
+        //         console.warn('[LiveRide] handleRideOffer error', e)
+        //     }
+        // }
         const handleRideAccepted = (payload: any) => {
             try {
-                console.log('[LiveRide] ride:accepted received', payload)
+
+                console.log('[LiveRide] << RIDE_ACCEPTED Handler start >>', { payload })
                 const rideObj = payload?.ride ?? payload
                 if (!rideObj) return
+                console.log('[LiveRide] setting rideData for accepted ride', rideObj._id)
                 setRideData(rideObj)
                 // clear any pending offers for this ride
                 setOffers([])
                 // open bottom sheet so UI transitions to LiveTrackingSheet
                 try {
+                    console.log('[LiveRide] attempting to open bottom sheet after accept')
                     bottomSheetRef.current?.snapToIndex?.(1)
                     console.log('[LiveRide] bottom sheet opened after ride:accepted')
+                    console.log('[LiveRide] << RIDE_ACCEPTED Handler end >>', { rideId: rideObj._id })
                 } catch (e) {
                     console.warn('[LiveRide] open bottom sheet failed', e)
                 }
@@ -245,6 +277,25 @@ const LiveRide = () => {
                 console.warn('[LiveRide] handleRideAccepted error', e)
             }
         }
+        // const handleRideAccepted = (payload: any) => {
+        //     try {
+        //         console.log('[LiveRide] ride:accepted received', payload)
+        //         const rideObj = payload?.ride ?? payload
+        //         if (!rideObj) return
+        //         setRideData(rideObj)
+        //         // clear any pending offers for this ride
+        //         setOffers([])
+        //         // open bottom sheet so UI transitions to LiveTrackingSheet
+        //         try {
+        //             bottomSheetRef.current?.snapToIndex?.(1)
+        //             console.log('[LiveRide] bottom sheet opened after ride:accepted')
+        //         } catch (e) {
+        //             console.warn('[LiveRide] open bottom sheet failed', e)
+        //         }
+        //     } catch (e) {
+        //         console.warn('[LiveRide] handleRideAccepted error', e)
+        //     }
+        // }
 
         on && on('ride:offer', handleRideOffer)
         on && on('ride:accepted', handleRideAccepted)
@@ -263,17 +314,39 @@ const LiveRide = () => {
     }, [id, on, off, emit])
 
     // accept an offer (customer)
+    // const acceptOffer = (offer: any) => {
+    //     try {
+    //         console.log('[LiveRide] customer accepting offer', offer)
+    //         if (!id) {
+    //             console.warn('[LiveRide] cannot accept offer, missing ride id')
+    //             return
+    //         }
+    //         emit && emit('customer:accept_offer', { rideId: id, riderId: offer.riderId })
+    //         // remove accepted offer from UI
+    //         setOffers(prev => prev.filter(o => o._id !== offer._id || o.riderId !== offer.riderId))
+    //         console.log('[LiveRide] emitted customer:accept_offer', { rideId: id, riderId: offer.riderId })
+    //     } catch (e) {
+    //         console.error('[LiveRide] acceptOffer error', e)
+    //         Alert.alert('Error', 'Failed to accept offer. Try again.')
+    //     }
+    // }
+
     const acceptOffer = (offer: any) => {
         try {
-            console.log('[LiveRide] customer accepting offer', offer)
+            // -            console.log('[LiveRide] customer accepting offer', offer)
+            console.log('[LiveRide] CUSTOMER acceptOffer clicked', { offer })
             if (!id) {
                 console.warn('[LiveRide] cannot accept offer, missing ride id')
                 return
             }
+            // -            emit && emit('customer:accept_offer', { rideId: id, riderId: offer.riderId })
+            console.log('[LiveRide] emitting customer:accept_offer -> server', { rideId: id, riderId: offer.riderId })
             emit && emit('customer:accept_offer', { rideId: id, riderId: offer.riderId })
             // remove accepted offer from UI
             setOffers(prev => prev.filter(o => o._id !== offer._id || o.riderId !== offer.riderId))
-            console.log('[LiveRide] emitted customer:accept_offer', { rideId: id, riderId: offer.riderId })
+            // -            console.log('[LiveRide] emitted customer:accept_offer', { rideId: id, riderId: offer.riderId })
+            console.log('[LiveRide] removed accepted offer from UI', { offerId: offer._id })
+            console.log('[LiveRide] customer:accept_offer emitted (done)')
         } catch (e) {
             console.error('[LiveRide] acceptOffer error', e)
             Alert.alert('Error', 'Failed to accept offer. Try again.')
