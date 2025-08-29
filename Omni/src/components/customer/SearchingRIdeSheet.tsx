@@ -6,7 +6,7 @@ import { commonStyles } from '@/styles/commonStyles'
 import { vehicleIcons } from '@/utils/mapUtils'
 import CustomText from '../shared/customText'
 import { MaterialCommunityIcons } from '@expo/vector-icons'
-import { router } from 'expo-router'
+import { router, useRouter } from 'expo-router'
 import { cancelRide as apiCancelRide } from '@/service/rideService'
 
 type VehicleType = 'bike' | 'auto' | 'cabEconomy' | 'cabPremium'
@@ -27,14 +27,86 @@ interface RideItem {
 }
 const SearchingRideSheet: FC<{ item: RideItem }> = ({ item }) => {
     const cancelledRef = useRef(false)
+    const { emit, off, socket } = UseWS()
+    const [loading, setLoading] = useState(false)
+    const router = useRouter()
+    const handledRef = useRef(false)
+
+    const localCancelCleanup = (rideId: string, message?: string) => {
+        try {
+            cancelledRef.current = true
+            handledRef.current = true
+            try { off && off('rideData') } catch (e) { }
+            try { off && off('ride:no_rider') } catch (e) { }
+            try { emit && emit('unsubscribeRide', { rideId }) } catch (e) { }
+            const msg = message || 'No rider available — try again'
+            try {
+                if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.SHORT)
+                else Alert.alert('No Rider', msg)
+            } catch (e) { }
+            try { router.replace('/customer/home') } catch (e) { console.warn('[SearchingRideSheet] navigate failed', e) }
+        } catch (e) { console.warn('[SearchingRideSheet] localCancelCleanup error', e) }
+    }
+
+    useEffect(() => {
+        if (!socket || !item?._id) return
+        const currentRideId = String(item._id)
+        try { emit && emit('subscribeRide', { rideId: currentRideId }) } catch (e) { }
+        const onRideEvent = (payload: any) => {
+            if (handledRef.current) return
+            try {
+                const ride = payload?.ride ?? payload
+                if (!ride) return
+                const rid = String(ride._id ?? ride.id ?? payload?.rideId ?? '')
+                if (rid !== currentRideId) return
+                const status = String(ride.status || '').toUpperCase()
+                // explicit exact-match for server token -> treat as cancel and go home
+                if (status === 'NO_RIDER_ALLOTED') {
+                    console.log('[SearchingRideSheet] received NO_RIDER_ALLOTED for', currentRideId)
+                    localCancelCleanup(currentRideId, ride?.message || 'No rider allotted — try again')
+                    return
+                }
+                // also handle other legacy variants just in case
+                const isNoRider =
+                    status === 'RIDER NOT ALLOTED' ||
+                    status === 'RIDER NOT ALLOTTED' ||
+                    status.includes('NO_RIDER_ALLOTED') ||
+                    (status.includes('RIDER') && (status.includes('NO') || status.includes('NO_')) && status.includes('ALLOTED'))
+
+                if (isNoRider) {
+                    console.log('[SearchingRideSheet] received NO-RIDER variant for', currentRideId, 'status=', status)
+                    localCancelCleanup(currentRideId, ride?.message || 'No rider allotted — try again')
+                    return
+                }
+                // rider assigned -> navigate to live ride
+                const hasRider = !!ride.rider
+                if (hasRider && status !== 'COMPLETED') {
+                    handledRef.current = true
+                    try {
+                        if (Platform.OS === 'android') ToastAndroid.show('Rider assigned. Opening live ride.', ToastAndroid.SHORT)
+                        else Alert.alert('Rider Assigned', 'Rider assigned. Opening live ride.')
+                    } catch (e) { }
+                    try { router.replace('/customer/liveride') } catch (e) { console.warn('[SearchingRideSheet] navigate failed', e) }
+                }
+            } catch (e) { console.warn('[SearchingRideSheet] onRideEvent error', e) }
+        }
+
+            ; (socket as any)?.on && (socket as any).on('rideData', onRideEvent)
+            ; (socket as any)?.on && (socket as any).on('ride:no_rider', onRideEvent)
+
+        return () => {
+            try { (socket as any)?.off && (socket as any).off('rideData', onRideEvent) } catch (e) { }
+            try { (socket as any)?.off && (socket as any).off('ride:no_rider', onRideEvent) } catch (e) { }
+        }
+    }, [socket, item?._id])
+
     useEffect(() => {
         // debug: print full ride item and coordinate types to console
         console.log('[SearchingRideSheet] item received:', item)
         console.log('[SearchingRideSheet] pickup coords:', item?.pickup?.latitude, item?.pickup?.longitude, 'types:', typeof item?.pickup?.latitude, typeof item?.pickup?.longitude)
         console.log('[SearchingRideSheet] drop coords:', item?.drop?.latitude, item?.drop?.longitude, 'types:', typeof item?.drop?.latitude, typeof item?.drop?.longitude)
     }, [item])
-    const { emit, off } = UseWS()
-    const [loading, setLoading] = useState(false)
+
 
     const handleCancelPress = async () => {
         const rideId = item?._id

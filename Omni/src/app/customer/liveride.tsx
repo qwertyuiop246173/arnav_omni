@@ -281,24 +281,58 @@ const LiveRide = () => {
     }
 
     // open bottom sheet when rideData arrives
+    // useEffect(() => {
+    //     if (!rideData) return
+    //     console.log('[LiveRide] rideData available -> opening bottom sheet if possible', rideData?.status)
+    //     const t = setTimeout(() => {
+    //         try {
+    //             bottomSheetRef.current?.snapToIndex?.(1)
+    //             console.log('[LiveRide] bottomSheet snapToIndex(1) called')
+    //         } catch (e) {
+    //             try {
+    //                 bottomSheetRef.current?.expand?.()
+    //                 console.log('[LiveRide] bottomSheet expand called')
+    //             } catch (e2) {
+    //                 console.warn('[LiveRide] bottomSheet open failed', e2)
+    //             }
+    //         }
+    //     }, 50)
+    //     return () => clearTimeout(t)
+    // }, [rideData])
+
     useEffect(() => {
         if (!rideData) return
-        console.log('[LiveRide] rideData available -> opening bottom sheet if possible', rideData?.status)
-        const t = setTimeout(() => {
-            try {
-                bottomSheetRef.current?.snapToIndex?.(1)
-                console.log('[LiveRide] bottomSheet snapToIndex(1) called')
-            } catch (e) {
+        try {
+            const status = String(rideData.status || '').toUpperCase()
+            if (status === 'NO_RIDER_ALLOTED' || status === 'NO RIDER ALLOTED') {
+                console.log('[LiveRide] received No_RIDER_ALLOTED -> navigate home')
+                // user feedback
                 try {
-                    bottomSheetRef.current?.expand?.()
-                    console.log('[LiveRide] bottomSheet expand called')
-                } catch (e2) {
-                    console.warn('[LiveRide] bottomSheet open failed', e2)
-                }
+                    if (Platform.OS === 'android') ToastAndroid.show('No rider available — try again', ToastAndroid.SHORT)
+                    else Alert.alert('No Rider', 'No rider available — try again')
+                } catch (e) { /* ignore */ }
+
+                // best-effort remove listeners
+                try {
+                    off && off('rideData')
+                    off && off('rideUpdate')
+                    off && off('rideCancelled')
+                    off && off('error')
+                    off && off('riderLocationUpdate')
+                    off && off('ride:offer')
+                    off && off('ride:accepted')
+                } catch (e) { console.warn('[LiveRide] cleanup error before navigate', e) }
+
+                // clear local state and navigate home (replace so back stack is clean)
+                setRideData(null)
+                resetAndNavigate('/customer/home')
+                return
             }
-        }, 50)
-        return () => clearTimeout(t)
-    }, [rideData])
+        } catch (e) {
+            console.warn('[LiveRide] No_RIDER_ALLOTED handler error', e)
+        }
+    }, [rideData, off])
+
     // handle ride cancelled explicitly: cleanup sockets and navigate home
     useEffect(() => {
         if (!rideData) return

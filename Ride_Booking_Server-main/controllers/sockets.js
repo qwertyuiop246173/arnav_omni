@@ -4,6 +4,22 @@ import User from "../models/User.js";
 import Ride from "../models/Ride.js";
 
 const onDutyRiders = new Map(); // key: userId -> { socketId, coords, vehicle }
+
+// in-memory map of pending offer timers: rideId -> Timeout
+const pendingOfferTimers = new Map();
+
+function clearPendingTimerForRide(rideId) {
+  try {
+    const id = String(rideId);
+    if (pendingOfferTimers.has(id)) {
+      clearTimeout(pendingOfferTimers.get(id));
+      pendingOfferTimers.delete(id);
+      console.log('[sockets] cleared pendingOfferTimer for ride', id);
+    }
+  } catch (e) { /* ignore */ }
+}
+
+
 const generateOtp = () => {
   return Math.floor(1000 + Math.random() * 9000).toString()
 }
@@ -228,7 +244,7 @@ const handleSocketConnection = (io) => {
           }
 
           console.log('[sockets] offer:accept updated ride', updated._id, 'status->', updated.status)
-
+          try { clearPendingTimerForRide(rideId) } catch (e) { /* ignore */ }
           // Broadcast updated ride to anyone subscribed to the ride room
           io.to(`ride:${rideId}`).emit('rideData', { ride: updated })
           console.log('[sockets] emitted rideData to room ride:' + rideId)
@@ -325,6 +341,7 @@ const handleSocketConnection = (io) => {
           socket.on("cancelRide", async () => {
             canceled = true;
             clearInterval(retryInterval);
+            try { clearPendingTimerForRide(rideId) } catch (e) { }
             await Ride.findByIdAndDelete(rideId);
             socket.emit("rideCanceled", { message: "Ride canceled" });
             if (ride.rider) {
@@ -350,25 +367,96 @@ const handleSocketConnection = (io) => {
       }
     });
 
+    // // Subscribe to a specific ride: join room and emit current ride data
+    // socket.on("subscribeRide", async (rideId) => {
+    //   try {
+    //     console.log('[sockets] subscribeRide', { socketId: socket.id, rideId });
+    //     socket.join(`ride:${rideId}`);
+    //     const ride = await Ride.findById(rideId).populate("customer rider").lean().exec();
+    //     if (ride) {
+    //       socket.emit("rideData", { ride });
+    //       console.log('[sockets] emitted rideData to', socket.id, rideId);
+    //     } else {
+    //       socket.emit("error", { message: "Ride not found", rideId });
+    //     }
+    //   } catch (err) {
+    //     console.error('[sockets] subscribeRide error', err);
+    //     socket.emit("error", { message: "Failed to subscribe ride", error: err.message });
+    //   }
+    // });
     // Subscribe to a specific ride: join room and emit current ride data
-    socket.on("subscribeRide", async (rideId) => {
+    socket.on("subscribeRide", async (payload) => {
       try {
-        console.log('[sockets] subscribeRide', { socketId: socket.id, rideId });
-        socket.join(`ride:${rideId}`);
-        const ride = await Ride.findById(rideId).populate("customer rider").lean().exec();
+        // support both: emit('subscribeRide', rideId) and emit('subscribeRide', { rideId })
+        const rid = payload?.rideId ?? payload;
+        console.log('[sockets] subscribeRide payload', { socketId: socket.id, payload, resolvedRideId: rid });
+        if (!rid) {
+          socket.emit('error', { message: 'subscribeRide missing rideId', payload });
+          return;
+        }
+        socket.join(`ride:${rid}`);
+        const ride = await Ride.findById(String(rid)).populate("customer rider").lean().exec();
         if (ride) {
           socket.emit("rideData", { ride });
-          console.log('[sockets] emitted rideData to', socket.id, rideId);
+          console.log('[sockets] emitted rideData to', socket.id, rid);
         } else {
-          socket.emit("error", { message: "Ride not found", rideId });
+          socket.emit("error", { message: "Ride not found", rideId: rid });
         }
       } catch (err) {
         console.error('[sockets] subscribeRide error', err);
-        socket.emit("error", { message: "Failed to subscribe ride", error: err.message });
+        socket.emit("error", { message: "Failed to subscribe ride", error: err?.message || String(err) });
       }
     });
 
     // Customer requests server to broadcast a search to riders for the ride's vehicle type
+    // socket.on("searchRide", async (rideId) => {
+    //   // try {
+    //   //   console.log('[sockets] searchRide request from', socket.id, 'rideId=', rideId);
+    //   //   const ride = await Ride.findById(rideId).lean().exec();
+    //   //   if (!ride) {
+    //   //     console.warn('[sockets] searchRide ride not found', rideId);
+    //   //     return;
+    //   //   }
+    //   //   const room = `riders:${ride.vehicle}`;
+    //   //   const payload = { rideId, ride, customerSocketId: socket.id };
+    //   //   io.to(room).emit("ride:new_request", payload);
+    //   //   console.log('[sockets] emitted ride:new_request to room', room, 'for ride', rideId);
+    //   // }
+    //   try {
+    //     const rid = String(ride._id || rideId);
+    //     console.log('[sockets] start auto-cancel setup for ride', rid, 'pendingBefore=', pendingOfferTimers.size);
+    //     clearPendingTimerForRide(rid);
+    //     const t = setTimeout(async () => {
+    //       console.log('[sockets] auto-cancel timeout fired for ride', rid);
+    //       try {
+    //         const current = await Ride.findById(rid).lean().exec();
+    //         if (!current) return;
+    //         const hasRider = !!current.rider;
+    //         const status = String(current.status || '').toUpperCase();
+    //         console.log('[sockets] auto-cancel check', rid, { hasRider, status });
+    //         if (!hasRider && status === 'SEARCHING_FOR_RIDER') {
+    //           const updated = await Ride.findByIdAndUpdate(
+    //             rid,
+    //             { $set: { status: 'No RIDER ALLOTED', rider: null } },
+    //             { new: true }
+    //           ).lean().exec();
+    //           console.log('[sockets] auto-cancel: no rider allotted for ride', rid);
+    //           try { io.to(socket.id).emit('ride:no_rider', { ride: updated }) } catch (e) { console.warn('[sockets] emit ride:no_rider failed', e) }
+    //           try { io.to(`ride:${rid}`).emit('rideData', { ride: updated }) } catch (e) { console.warn('[sockets] emit rideData failed', e) }
+    //         } else {
+    //           console.log('[sockets] auto-cancel skipped for ride', rid, 'hasRider=', hasRider, 'status=', status);
+    //         }
+    //       } catch (err) {
+    //         console.warn('[sockets] auto-cancel error', err);
+    //       } finally {
+    //         pendingOfferTimers.delete(rid);
+    //         console.log('[sockets] pendingOfferTimers size after delete=', pendingOfferTimers.size);
+    //       }
+    //     }, 5 * 1000);
+    //     pendingOfferTimers.set(rid, t);
+    //     console.log('[sockets] started auto-cancel timer for ride', rid, 'pendingAfter=', pendingOfferTimers.size);
+    //   } catch (e) { console.warn('[sockets] start auto-cancel timer failed', e) }
+    // });
     socket.on("searchRide", async (rideId) => {
       try {
         console.log('[sockets] searchRide request from', socket.id, 'rideId=', rideId);
@@ -377,14 +465,85 @@ const handleSocketConnection = (io) => {
           console.warn('[sockets] searchRide ride not found', rideId);
           return;
         }
+
         const room = `riders:${ride.vehicle}`;
-        const payload = { rideId, ride, customerSocketId: socket.id };
-        io.to(room).emit("ride:new_request", payload);
-        console.log('[sockets] emitted ride:new_request to room', room, 'for ride', rideId);
+        // const payload = { rideId, ride, customerSocketId: socket.id };
+        const customerSocketId = socket.id; // capture for timer closure
+        const payload = { rideId, ride, customerSocketId };
+        try {
+          const socketsInRoom = await io.in(room).allSockets();
+          const socketsArray = Array.from(socketsInRoom || []);
+          console.log('[sockets] room', room, 'socketCount=', socketsArray.length, 'sockets=', socketsArray);
+          if ((socketsArray.length || 0) > 0) {
+            io.to(room).emit("ride:new_request", payload);
+            console.log('[sockets] emitted ride:new_request to room', room, 'for ride', rideId);
+          } else {
+            const pickup = { latitude: ride.pickup?.latitude, longitude: ride.pickup?.longitude };
+            console.log('[sockets] room', room, 'is empty -> using sendNearbyRiders fallback (10km)');
+            const nearby = sendNearbyRiders(socket, pickup, ride, 10000);
+            console.log('[sockets] fallback sendNearbyRiders sent count=', nearby.length, 'for ride', rideId);
+          }
+        } catch (err) {
+          console.warn('[sockets] searchRide room check failed, emitting anyway', err);
+          io.to(room).emit("ride:new_request", payload);
+        }
+
+        // start auto-cancel timer: if no rider accepts within 60s, mark NO RIDER ALLOTED
+        try {
+          const rid = String(ride._id || rideId);
+          clearPendingTimerForRide(rid);
+          const t = setTimeout(async () => {
+            console.log('[sockets] auto-cancel timeout fired for ride', rid);
+            try {
+              const current = await Ride.findById(rid).lean().exec();
+              if (!current) return;
+              const hasRider = !!current.rider;
+              const status = String(current.status || '').toUpperCase();
+              console.log('[sockets] auto-cancel check', rid, { hasRider, status });
+              if (!hasRider && status === 'SEARCHING_FOR_RIDER') {
+                // const updated = await Ride.findByIdAndUpdate(
+                //   rid,
+                //   { $set: { status: 'No RIDER ALLOTED', rider: null } },
+                //   { new: true }
+                // ).lean().exec();
+                // console.log('[sockets] auto-cancel: no rider allotted for ride', rid);
+                // try { io.to(socket.id).emit('ride:no_rider', { ride: updated }) } catch (e) { console.warn('[sockets] emit ride:no_rider failed', e) }
+                // try { io.to(`ride:${rid}`).emit('rideData', { ride: updated }) } catch (e) { console.warn('[sockets] emit rideData failed', e) }
+                try {
+                  const updated = await Ride.findOneAndUpdate(
+                    { _id: rid, rider: null, status: 'SEARCHING_FOR_RIDER' }, // atomic precondition
+                    { $set: { status: 'No_RIDER_ALLOTED', rider: null } },
+                    { new: true }
+                  ).lean().exec();
+
+                  if (updated) {
+                    console.log('[sockets] auto-cancel: No_RIDER_ALLOTED for ride', rid);
+                    try { io.to(customerSocketId).emit('ride:no_rider', { ride: updated }) } catch (e) { console.warn('[sockets] emit ride:no_rider failed', e) }
+                    try { io.to(`ride:${rid}`).emit('rideData', { ride: updated }) } catch (e) { console.warn('[sockets] emit rideData failed', e) }
+                  } else {
+                    console.log('[sockets] auto-cancel skipped — ride changed before update', rid);
+                  }
+                } catch (e) {
+                  console.warn('[sockets] auto-cancel emit failed', e)
+                }
+              } else {
+                console.log('[sockets] auto-cancel skipped for ride', rid, 'hasRider=', hasRider, 'status=', status);
+              }
+            } catch (err) {
+              console.warn('[sockets] auto-cancel error', err);
+            } finally {
+              pendingOfferTimers.delete(rid);
+              console.log('[sockets] pendingOfferTimers size after delete=', pendingOfferTimers.size);
+            }
+          }, 60 * 1000);
+          pendingOfferTimers.set(rid, t);
+          console.log('[sockets] started auto-cancel timer for ride', rid, 'pendingAfter=', pendingOfferTimers.size);
+        } catch (e) { console.warn('[sockets] start auto-cancel timer failed', e) }
       } catch (err) {
         console.error('[sockets] searchRide error', err);
       }
     });
+
 
     // Rider sends offer back to a customer; server forwards to customer socket
     socket.on("offer:send", (offer) => {
