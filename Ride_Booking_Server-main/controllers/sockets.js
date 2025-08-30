@@ -3,6 +3,19 @@ import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import Ride from "../models/Ride.js";
 
+const EARTH_RADIUS_KM = 6371
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const toRad = (v) => (v * Math.PI) / 180
+  const dLat = toRad(lat2 - lat1)
+  const dLon = toRad(lon2 - lon1)
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return EARTH_RADIUS_KM * c
+}
+const riderLocations = new Map()
 const onDutyRiders = new Map(); // key: userId -> { socketId, coords, vehicle }
 
 // in-memory map of pending offer timers: rideId -> Timeout
@@ -78,7 +91,37 @@ const handleSocketConnection = (io) => {
   io.on("connection", (socket) => {
     const user = socket.user;
     console.log(`[sockets] client connected socket=${socket.id} userId=${user?.id} role=${user?.role}`);
+    // track rider location updates for distance filtering
+    console.log('[sockets] registering rider location handlers for', socket.id, 'role=', socket.user?.role);
+    socket.on('rider:update_location', (loc) => {
+      try {
+        const lat = parseFloat(loc?.latitude ?? loc?.lat ?? loc?.latit ?? NaN);
+        const lon = parseFloat(loc?.longitude ?? loc?.lng ?? loc?.long ?? NaN);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          riderLocations.set(socket.id, { latitude: lat, longitude: lon, riderId: socket.user?.id ?? null });
+          console.log('[sockets] rider:update_location saved', { socketId: socket.id, lat, lon });
+          // also update onDutyRiders entry if present
+          if (socket.user?.role === 'rider' && onDutyRiders.has(socket.user.id)) {
+            const e = onDutyRiders.get(socket.user.id) || {};
+            e.coords = { latitude: lat, longitude: lon };
+            e.socketId = socket.id;
+            onDutyRiders.set(socket.user.id, e);
+            console.log('[sockets] onDutyRiders updated for rider', socket.user.id);
+          }
+        } else {
+          console.log('[sockets] rider:update_location invalid coords', loc);
+        }
+      } catch (e) {
+        console.warn('[sockets] rider:update_location error', e);
+      }
+    });
 
+    socket.on('disconnect', () => {
+      try {
+        riderLocations.delete(socket.id);
+        console.log('[sockets] socket disconnected, removed rider location for', socket.id);
+      } catch (e) { console.warn('[sockets] disconnect handler error', e); }
+    });
     // ----- RIDER HANDLERS -----
     if (user.role === "rider") {
       // go on duty: register rider with coords (and preserve previous vehicle if set)
@@ -471,17 +514,74 @@ const handleSocketConnection = (io) => {
         const customerSocketId = socket.id; // capture for timer closure
         const payload = { rideId, ride, customerSocketId };
         try {
+          // const socketsInRoom = await io.in(room).allSockets();
+          // const socketsArray = Array.from(socketsInRoom || []);
+          // console.log('[sockets] room', room, 'socketCount=', socketsArray.length, 'sockets=', socketsArray);
+          // if ((socketsArray.length || 0) > 0) {
+          //   io.to(room).emit("ride:new_request", payload);
+          //   console.log('[sockets] emitted ride:new_request to room', room, 'for ride', rideId);
+          // } else {
+          //   const pickup = { latitude: ride.pickup?.latitude, longitude: ride.pickup?.longitude };
+          //   console.log('[sockets] room', room, 'is empty -> using sendNearbyRiders fallback (10km)');
+          //   const nearby = sendNearbyRiders(socket, pickup, ride, 10000);
+          //   console.log('[sockets] fallback sendNearbyRiders sent count=', nearby.length, 'for ride', rideId);
+          // }
           const socketsInRoom = await io.in(room).allSockets();
           const socketsArray = Array.from(socketsInRoom || []);
           console.log('[sockets] room', room, 'socketCount=', socketsArray.length, 'sockets=', socketsArray);
-          if ((socketsArray.length || 0) > 0) {
-            io.to(room).emit("ride:new_request", payload);
-            console.log('[sockets] emitted ride:new_request to room', room, 'for ride', rideId);
-          } else {
-            const pickup = { latitude: ride.pickup?.latitude, longitude: ride.pickup?.longitude };
+
+          // pickup coords
+          const pickupLat = Number(ride?.pickup?.latitude)
+          const pickupLon = Number(ride?.pickup?.longitude)
+          if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLon)) {
+            console.warn('[sockets] searchRide missing pickup coords -> falling back to broad room emit', { rideId, pickup: ride?.pickup })
+            io.to(room).emit("ride:new_request", payload)
+            console.log('[sockets] emitted ride:new_request to room (fallback) ', room, 'for ride', rideId)
+          } else if ((socketsArray.length || 0) === 0) {
             console.log('[sockets] room', room, 'is empty -> using sendNearbyRiders fallback (10km)');
-            const nearby = sendNearbyRiders(socket, pickup, ride, 10000);
+            const nearby = sendNearbyRiders(socket, { latitude: pickupLat, longitude: pickupLon }, ride, 10000);
             console.log('[sockets] fallback sendNearbyRiders sent count=', nearby.length, 'for ride', rideId);
+          } else {
+            // Only emit to riders in the room that are within 10km of pickup
+            let sent = 0
+            for (const sid of socketsArray) {
+              try {
+                // try find rider entry from onDutyRiders map (userId -> { socketId, coords, vehicle })
+                const riderEntry = Array.from(onDutyRiders.values()).find(r => r.socketId === sid)
+                const storedCoords = riderEntry?.coords || riderLocations.get(sid) || null
+                if (!storedCoords || (!storedCoords.latitude && !storedCoords.lat && !storedCoords.latit)) {
+                  console.log('[sockets] rider socket', sid, 'has no stored coords -> skipping')
+                  continue
+                }
+                const rLat = Number(storedCoords.latitude ?? storedCoords.lat ?? storedCoords.latit)
+                const rLon = Number(storedCoords.longitude ?? storedCoords.lng ?? storedCoords.long ?? storedCoords.lon)
+                if (!Number.isFinite(rLat) || !Number.isFinite(rLon)) {
+                  console.log('[sockets] rider socket', sid, 'coords invalid -> skipping', storedCoords)
+                  continue
+                }
+                const distMeters = geolib.getDistance({ latitude: pickupLat, longitude: pickupLon }, { latitude: rLat, longitude: rLon })
+                console.log('[sockets] check rider socket', sid, 'coords=', { rLat, rLon }, 'distMeters=', distMeters)
+                if (distMeters <= 10000) { // within 10km
+                  try {
+                    io.to(sid).emit("ride:new_request", payload)
+                    sent++
+                    console.log('[sockets] emitted ride:new_request to rider socket', sid, 'distKm=', (distMeters / 1000).toFixed(2))
+                  } catch (emitErr) {
+                    console.warn('[sockets] emit to rider socket failed', sid, emitErr)
+                  }
+                } else {
+                  console.log('[sockets] rider', sid, `out of range (${(distMeters / 1000).toFixed(2)}km) -> skipped`)
+                }
+              } catch (e) {
+                console.warn('[sockets] error processing rider socket', sid, e)
+              }
+            }
+            console.log('[sockets] searchRide sent count to room-filtered riders=', sent, 'for ride', rideId)
+            if (sent === 0) {
+              console.log('[sockets] no in-room riders within 10km -> running sendNearbyRiders fallback (10km)')
+              const nearby = sendNearbyRiders(socket, { latitude: pickupLat, longitude: pickupLon }, ride, 10000)
+              console.log('[sockets] fallback sendNearbyRiders sent count=', nearby.length, 'for ride', rideId)
+            }
           }
         } catch (err) {
           console.warn('[sockets] searchRide room check failed, emitting anyway', err);

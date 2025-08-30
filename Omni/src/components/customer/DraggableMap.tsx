@@ -4,7 +4,7 @@ import { customMapStyle, indiaIntialRegion } from '@/utils/CustomMap'
 import { reverseGeocode } from '@/utils/mapUtils'
 import { useIsFocused } from '@react-navigation/native'
 import { FC, memo, useEffect, useRef, useState } from 'react'
-import { View, Text, Image, TouchableOpacity } from 'react-native'
+import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native'
 import MapView, { Marker, Region } from 'react-native-maps'
 import haversine from 'haversine-distance'
 import { FontAwesome6, MaterialCommunityIcons } from '@expo/vector-icons'
@@ -146,7 +146,7 @@ const DraggableMap: FC<{ height: number }> = ({ height }) => {
         <View style={{ height: height, width: '100%' }}>
             <MapView
                 ref={mapRef}
-                maxZoomLevel={18}
+                maxZoomLevel={19}
                 minZoomLevel={12}
                 pitchEnabled={false}
                 onRegionChangeComplete={handleRegionChangeComplete}
@@ -215,3 +215,5 @@ const DraggableMap: FC<{ height: number }> = ({ height }) => {
 }
 
 export default memo(DraggableMap)
+
+

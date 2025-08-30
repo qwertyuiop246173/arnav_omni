@@ -88,46 +88,145 @@ import User from '../models/User.js';
 import jwt from 'jsonwebtoken';
 
 
+// export const auth = async (req, res) => {
+//     try {
+//         console.log('auth route called');
+//         console.log('Incoming headers:', req.headers);
+//         console.log('Request body:', req.body);
+//         console.log('Phone received from app:', req.body.phone); // <-- Add this lines
+//         const { phone, role } = req.body;
+
+//         if (!phone || !role) {
+//             return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Please provide phone number and role' });
+//         }
+
+//         // let user = await User.findOne({ phone, role });
+//         // if (!user) {
+//         //     user = await User.create({ phone, role });
+//         // }
+//         // find existing user by phone+role or create one atomically (upsert)
+//         const user = await User.findOneAndUpdate(
+//             { phone: String(phone), role: String(role) },
+//             {
+//                 $setOnInsert: {
+//                     phone: String(phone),
+//                     role: String(role),
+//                     createdAt: new Date()
+//                 },
+//                 $set: { lastLoginAt: new Date() } // update on every login
+//             },
+//             { new: true, upsert: true, setDefaultsOnInsert: true }
+//         ).lean().exec();
+//         console.log('User found or created:', user);
+//         const token = jwt.sign(
+//             { userId: user._id, role: user.role },
+//             process.env.ACCESS_TOKEN_SECRET,
+//             { expiresIn: process.env.ACCESS_TOKEN_EXPIRY }
+//         );
+
+//         const refresh_token = jwt.sign(
+//             { userId: user._id, role: user.role },
+//             process.env.REFRESH_TOKEN_SECRET,
+//             { expiresIn: process.env.REFRESH_TOKEN_EXPIRY }
+//         );
+
+//         return res.status(200).json({
+//             user,
+//             token,
+//             refresh_token
+//         });
+//     } catch (error) {
+//         console.error('Auth error:', error);
+//         return res.status(401).json({ message: 'Authentication failed', error: error.message });
+//     }
+// };
 export const auth = async (req, res) => {
     try {
-        console.log('auth route called');
-        console.log('Incoming headers:', req.headers);
-        console.log('Request body:', req.body);
-        console.log('Phone received from app:', req.body.phone); // <-- Add this lines
-        const { phone, role } = req.body;
+        console.log('[auth] route called')
+        console.log('[auth] headers:', req.headers)
+        console.log('[auth] body:', req.body)
+
+        const { phone, role } = req.body || {}
 
         if (!phone || !role) {
-            return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Please provide phone number and role' });
+            console.warn('[auth] missing phone or role')
+            return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Please provide phone number and role' })
         }
 
-        let user = await User.findOne({ phone, role });
-        if (!user) {
-            user = await User.create({ phone, role });
+        if (!['customer', 'rider'].includes(String(role).toLowerCase())) {
+            console.warn('[auth] invalid role provided', role)
+            return res.status(StatusCodes.BAD_REQUEST).json({ message: 'Invalid role' })
         }
-        console.log('User found or created:', user);
+
+        // Try to find existing user first
+        let user = await User.findOne({ phone: String(phone) }).lean().exec()
+
+        if (user) {
+            // Ensure role matches or update role if desired (here we keep existing role)
+            try {
+                await User.updateOne(
+                    { _id: user._id },
+                    { $set: { lastLoginAt: new Date() } }
+                ).exec()
+            } catch (uErr) {
+                console.warn('[auth] update lastLogin failed', uErr)
+            }
+            // refresh user object
+            user = await User.findById(user._id).lean().exec()
+            console.log('[auth] existing user found', { userId: user._id, phone: user.phone })
+        } else {
+            // Create user; handle possible race causing duplicate key by catching E11000 and reading existing
+            try {
+                const created = await User.create({
+                    phone: String(phone),
+                    role: String(role),
+                    createdAt: new Date(),
+                    lastLoginAt: new Date()
+                })
+                user = created.toObject ? created.toObject() : created
+                console.log('[auth] user created', { userId: user._id, phone: user.phone })
+            } catch (createErr) {
+                if (createErr && (createErr.code === 11000 || (createErr.errorResponse && createErr.errorResponse.code === 11000))) {
+                    console.warn('[auth] create race detected, fetching existing user', createErr)
+                    user = await User.findOne({ phone: String(phone) }).lean().exec()
+                    if (!user) {
+                        console.error('[auth] duplicate-key occurred but existing user not found; rethrowing', createErr)
+                        throw createErr
+                    }
+                    console.log('[auth] recovered existing user after race', { userId: user._id, phone: user.phone })
+                } else {
+                    throw createErr
+                }
+            }
+        }
+
+        // Issue tokens
         const token = jwt.sign(
-            { userId: user._id, role: user.role },
+            { userId: String(user._id), role: user.role },
             process.env.ACCESS_TOKEN_SECRET,
             { expiresIn: process.env.ACCESS_TOKEN_EXPIRY }
-        );
+        )
 
         const refresh_token = jwt.sign(
-            { userId: user._id, role: user.role },
+            { userId: String(user._id), role: user.role },
             process.env.REFRESH_TOKEN_SECRET,
             { expiresIn: process.env.REFRESH_TOKEN_EXPIRY }
-        );
+        )
 
-        return res.status(200).json({
+        return res.status(StatusCodes.OK).json({
             user,
             token,
             refresh_token
-        });
+        })
     } catch (error) {
-        console.error('Auth error:', error);
-        return res.status(401).json({ message: 'Authentication failed', error: error.message });
+        console.error('[auth] error', error)
+        // If duplicate-key still bubbles up, handle gracefully
+        if (error && (error.code === 11000 || (error.errorResponse && error.errorResponse.code === 11000))) {
+            return res.status(409).json({ message: 'Duplicate key error', error: error.message })
+        }
+        return res.status(StatusCodes.UNAUTHORIZED).json({ message: 'Authentication failed', error: error.message })
     }
-};
-
+}
 export const refreshToken = async (req, res) => {
     try {
         const { refresh_token } = req.body;
